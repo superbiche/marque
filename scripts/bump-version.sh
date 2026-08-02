@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Bump the version in package.json, src-tauri/tauri.conf.json, and
+# src-tauri/Cargo.toml. No git operations — commit/tag manually.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -17,54 +19,26 @@ if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
+# Portable in-place sed: GNU sed and BSD sed disagree on -i syntax,
+# so write a .bak backup and remove it.
+sed_inplace() {
+  local expr="$1" file="$2"
+  sed -i.bak "$expr" "$file"
+  rm -f "$file.bak"
+}
+
 echo "Bumping version to $VERSION"
-echo ""
-echo "Files to update:"
-echo "  package.json"
-echo "  src-tauri/tauri.conf.json"
-echo "  src-tauri/Cargo.toml"
-echo "  src-tauri/Cargo.lock (via cargo check)"
-echo ""
-read -rp "Continue? [y/N] " confirm
-if [[ "$confirm" != [yY] ]]; then
-  echo "Aborted."
-  exit 0
-fi
 
-echo ""
-
-# package.json
 echo "Updating package.json..."
-sed -i '' "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$VERSION\"/" "$ROOT_DIR/package.json"
+sed_inplace "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$VERSION\"/" "$ROOT_DIR/package.json"
 
-# tauri.conf.json
 echo "Updating src-tauri/tauri.conf.json..."
-sed -i '' "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$VERSION\"/" "$ROOT_DIR/src-tauri/tauri.conf.json"
+sed_inplace "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"$VERSION\"/" "$ROOT_DIR/src-tauri/tauri.conf.json"
 
 # Cargo.toml — only the package version (line 3)
 echo "Updating src-tauri/Cargo.toml..."
-sed -i '' "3s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"$VERSION\"/" "$ROOT_DIR/src-tauri/Cargo.toml"
-
-# Regenerate Cargo.lock
-echo "Running cargo check to update Cargo.lock..."
-(cd "$ROOT_DIR/src-tauri" && cargo check --quiet)
-
-# Commit and tag
-echo "Committing..."
-git -C "$ROOT_DIR" add \
-  package.json \
-  src-tauri/tauri.conf.json \
-  src-tauri/Cargo.toml \
-  src-tauri/Cargo.lock
-
-git -C "$ROOT_DIR" commit -m "v$VERSION"
-
-echo "Tagging v$VERSION..."
-git -C "$ROOT_DIR" tag "v$VERSION"
-
-echo "Pushing..."
-git -C "$ROOT_DIR" push
-git -C "$ROOT_DIR" push --tags
+sed_inplace "3s/version = \"[0-9]*\.[0-9]*\.[0-9]*\"/version = \"$VERSION\"/" "$ROOT_DIR/src-tauri/Cargo.toml"
 
 echo ""
-echo "Done! v$VERSION released."
+echo "Done. Versions bumped to $VERSION."
+echo "Note: Cargo.lock updates on the next cargo build/check."
