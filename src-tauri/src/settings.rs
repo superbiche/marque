@@ -1,6 +1,7 @@
 use crate::error::AppResult;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Folder {
@@ -39,14 +40,46 @@ pub struct Settings {
 const RECENT_LIMIT: usize = 20;
 const FILE_NAME: &str = "settings.json";
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct SettingsLoadStatus {
+    pub corrupt_settings_path: Option<String>,
+}
+
+pub struct LoadedSettings {
+    pub settings: Settings,
+    pub status: SettingsLoadStatus,
+}
+
 impl Settings {
-    pub fn load(dir: &Path) -> AppResult<Self> {
+    pub fn load_with_status(dir: &Path) -> AppResult<LoadedSettings> {
         let p = dir.join(FILE_NAME);
         if !p.exists() {
-            return Ok(Self::default());
+            return Ok(LoadedSettings {
+                settings: Self::default(),
+                status: SettingsLoadStatus::default(),
+            });
         }
         let raw = std::fs::read_to_string(&p)?;
-        Ok(serde_json::from_str(&raw).unwrap_or_default())
+        match serde_json::from_str(&raw) {
+            Ok(settings) => Ok(LoadedSettings {
+                settings,
+                status: SettingsLoadStatus::default(),
+            }),
+            Err(error) => {
+                let corrupt_path = preserve_corrupt_settings(&p)?;
+                eprintln!(
+                    "marque: settings file {} was corrupt and was preserved at {}: {error}",
+                    p.display(),
+                    corrupt_path.display()
+                );
+                Ok(LoadedSettings {
+                    settings: Self::default(),
+                    status: SettingsLoadStatus {
+                        corrupt_settings_path: Some(corrupt_path.to_string_lossy().into_owned()),
+                    },
+                })
+            }
+        }
     }
 
     pub fn save(&self, dir: &Path) -> AppResult<()> {
@@ -79,6 +112,27 @@ impl Settings {
     }
 }
 
+fn preserve_corrupt_settings(path: &Path) -> AppResult<PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut suffix = 0_u32;
+    loop {
+        let label = if suffix == 0 {
+            format!("{FILE_NAME}.corrupt-{timestamp}")
+        } else {
+            format!("{FILE_NAME}.corrupt-{timestamp}-{suffix}")
+        };
+        let candidate = path.with_file_name(label);
+        if !candidate.exists() {
+            std::fs::rename(path, &candidate)?;
+            return Ok(candidate);
+        }
+        suffix += 1;
+    }
+}
+
 /// Settings directory: `~/.config/marque` (XDG config dir).
 pub fn settings_dir() -> PathBuf {
     dirs::config_dir()
@@ -96,7 +150,7 @@ fn legacy_settings_dir() -> PathBuf {
 
 /// One-time first-run migration: if no settings exist at the new location but
 /// a legacy marky settings.json does, copy it over. The old file is never
-/// deleted. Call before `Settings::load`.
+/// deleted. Call before `Settings::load_with_status`.
 pub fn migrate_legacy_settings() {
     migrate_legacy_settings_between(&legacy_settings_dir(), &settings_dir());
 }
@@ -149,7 +203,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let s = Settings::default();
         s.save(dir.path()).unwrap();
-        let loaded = Settings::load(dir.path()).unwrap();
+        let loaded = Settings::load_with_status(dir.path()).unwrap().settings;
         assert!(loaded.folders.is_empty());
         assert!(loaded.recent_files.is_empty());
     }
@@ -161,7 +215,7 @@ mod tests {
         s.add_folder(folder("f1", "/tmp/a"));
         s.push_recent("/tmp/a/file.md".into());
         s.save(dir.path()).unwrap();
-        let loaded = Settings::load(dir.path()).unwrap();
+        let loaded = Settings::load_with_status(dir.path()).unwrap().settings;
         assert_eq!(loaded.folders.len(), 1);
         assert_eq!(loaded.recent_files, vec!["/tmp/a/file.md"]);
         assert_eq!(loaded.last_opened_file.as_deref(), Some("/tmp/a/file.md"));
@@ -204,16 +258,30 @@ mod tests {
     #[test]
     fn load_missing_file_is_default() {
         let dir = tempdir().unwrap();
-        let s = Settings::load(dir.path()).unwrap();
+        let s = Settings::load_with_status(dir.path()).unwrap().settings;
         assert!(s.folders.is_empty());
     }
 
     #[test]
-    fn load_corrupt_file_falls_back_to_default() {
+    fn load_corrupt_file_is_preserved_before_falling_back_to_default() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("settings.json"), "{not json").unwrap();
-        let s = Settings::load(dir.path()).unwrap();
-        assert!(s.folders.is_empty());
+        let original = "{not json";
+        let settings_path = dir.path().join(FILE_NAME);
+        std::fs::write(&settings_path, original).unwrap();
+
+        let loaded = Settings::load_with_status(dir.path()).unwrap();
+
+        assert!(loaded.settings.folders.is_empty());
+        assert!(!settings_path.exists());
+        let preserved = PathBuf::from(loaded.status.corrupt_settings_path.unwrap());
+        assert!(preserved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("settings.json.corrupt-")));
+        assert_eq!(std::fs::read_to_string(&preserved).unwrap(), original);
+
+        Settings::default().save(dir.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(preserved).unwrap(), original);
     }
 
     #[test]
@@ -226,7 +294,7 @@ mod tests {
 
         migrate_legacy_settings_between(old.path(), &new_dir);
 
-        let s = Settings::load(&new_dir).unwrap();
+        let s = Settings::load_with_status(&new_dir).unwrap().settings;
         assert_eq!(s.folders.len(), 1);
         assert_eq!(s.folders[0].id, "f1");
         // Old file is preserved, never deleted.
@@ -250,7 +318,7 @@ mod tests {
 
         migrate_legacy_settings_between(old.path(), new.path());
 
-        let s = Settings::load(new.path()).unwrap();
+        let s = Settings::load_with_status(new.path()).unwrap().settings;
         assert_eq!(s.folders.len(), 1);
         assert_eq!(s.folders[0].id, "new");
     }
@@ -268,7 +336,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let raw = r#"{"vaults":[{"id":"v1","name":"old","path":"/tmp/x","added_at":"0"}]}"#;
         std::fs::write(dir.path().join("settings.json"), raw).unwrap();
-        let s = Settings::load(dir.path()).unwrap();
+        let s = Settings::load_with_status(dir.path()).unwrap().settings;
         assert_eq!(s.folders.len(), 1);
         assert_eq!(s.folders[0].id, "v1");
     }

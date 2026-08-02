@@ -36,6 +36,16 @@ export interface SearchResult extends IndexedFile {
   score: number;
 }
 
+export interface SettingsLoadStatus {
+  corrupt_settings_path: string | null;
+}
+
+export interface WatchLimit {
+  folder_id: string;
+  watched: number;
+  limit: number;
+}
+
 export const tauri = {
   getInitialTarget: () => invoke<InitialTarget>("get_initial_target"),
   setInitialTarget: (target: InitialTarget) => invoke<void>("set_initial_target", { target }),
@@ -52,6 +62,7 @@ export const tauri = {
   savePreferences: (prefs: PreferencesPayload) =>
     invoke<void>("save_preferences", { prefs }),
   loadPreferences: () => invoke<PreferencesPayload>("load_preferences"),
+  getSettingsLoadStatus: () => invoke<SettingsLoadStatus>("get_settings_load_status"),
 };
 
 export interface PreferencesPayload {
@@ -72,4 +83,8 @@ export function onFileChanged(cb: (paths: string[]) => void): Promise<UnlistenFn
 
 export function onCliTarget(cb: (t: InitialTarget) => void): Promise<UnlistenFn> {
   return listen<InitialTarget>("cli://target", (e) => cb(e.payload));
+}
+
+export function onFolderWatchLimit(cb: (limit: WatchLimit) => void): Promise<UnlistenFn> {
+  return listen<WatchLimit>("folder://watch-limit", (e) => cb(e.payload));
 }

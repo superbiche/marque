@@ -15,7 +15,11 @@ let promise: Promise<Highlighter> | null = null;
 
 export function getHighlighter(): Promise<Highlighter> {
   if (!promise) {
-    promise = createHighlighter({ themes: THEMES, langs: COMMON_LANGS });
+    const attempt = createHighlighter({ themes: THEMES, langs: COMMON_LANGS });
+    promise = attempt;
+    void attempt.catch(() => {
+      if (promise === attempt) promise = null;
+    });
   }
   return promise;
 }

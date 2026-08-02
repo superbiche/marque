@@ -71,8 +71,8 @@ pub fn run() {
         .setup(move |app| {
             settings::migrate_legacy_settings();
             let dir = settings_dir();
-            let settings = Settings::load(&dir).unwrap_or_default();
-            let registry: SharedRegistry = Arc::new(FolderRegistry::from_settings(settings));
+            let loaded_settings = Settings::load_with_status(&dir)?;
+            let registry: SharedRegistry = Arc::new(FolderRegistry::from_settings(loaded_settings.settings));
             let watchers: SharedWatchers = Arc::new(Watchers::default());
 
             let initial_resolved = match &initial {
@@ -89,6 +89,7 @@ pub fn run() {
             };
 
             app.manage(InitialTargetState(Mutex::new(initial_resolved)));
+            app.manage(loaded_settings.status);
             app.manage(Arc::clone(&registry));
             app.manage(Arc::clone(&watchers));
             hydrate_folders(app.handle().clone(), registry, watchers);
@@ -108,6 +109,7 @@ pub fn run() {
             commands::save_theme,
             commands::save_preferences,
             commands::load_preferences,
+            commands::get_settings_load_status,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

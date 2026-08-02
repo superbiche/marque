@@ -3,7 +3,7 @@ use crate::error::{AppError, AppResult};
 use crate::folder::TreeNode;
 use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
-use crate::settings::{settings_dir, Folder};
+use crate::settings::{settings_dir, Folder, SettingsLoadStatus};
 use crate::watcher::{hydrate_folder, SharedWatchers};
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -171,4 +171,11 @@ pub fn load_preferences(registry: State<'_, SharedRegistry>) -> PreferencesPaylo
         copy_as_markdown: s.copy_as_markdown,
         sidebar_group_by_repo: s.sidebar_group_by_repo,
     }
+}
+
+#[tauri::command]
+pub fn get_settings_load_status(
+    status: State<'_, SettingsLoadStatus>,
+) -> SettingsLoadStatus {
+    (*status).clone()
 }

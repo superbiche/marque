@@ -10,6 +10,7 @@ import { Pane } from "@/components/Pane";
 import { TableOfContents } from "@/components/TableOfContents";
 import { Toolbar } from "@/components/Toolbar";
 import { CommandPalette } from "@/components/CommandPalette";
+import { Notifications } from "@/components/Notifications";
 import { tauri, onCliTarget, onFolderChanged, onFileChanged, type AnnotatedFolder } from "@/lib/tauri";
 import {
   createInitialState,
@@ -310,6 +311,7 @@ export default function App() {
       <PreferencesProvider>
         <TooltipProvider delayDuration={300}>
           <AppShell />
+          <Notifications />
         </TooltipProvider>
       </PreferencesProvider>
     </ThemeProvider>

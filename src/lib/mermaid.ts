@@ -3,7 +3,11 @@ let mermaidPromise: Promise<typeof import("mermaid").default> | null = null;
 
 async function loadMermaid() {
   if (!mermaidPromise) {
-    mermaidPromise = import("mermaid").then((m) => m.default);
+    const attempt = import("mermaid").then((m) => m.default);
+    mermaidPromise = attempt;
+    void attempt.catch(() => {
+      if (mermaidPromise === attempt) mermaidPromise = null;
+    });
   }
   return mermaidPromise;
 }
