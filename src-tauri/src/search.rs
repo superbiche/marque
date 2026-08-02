@@ -2,6 +2,7 @@ use crate::folder::IndexedFile;
 use nucleo::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo::{Config, Matcher};
 use serde::Serialize;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResult {
@@ -13,10 +14,15 @@ pub struct SearchResult {
 /// Fuzzy-match the query against `vault_name/relative_path` for every file.
 /// Returns up to `limit` results sorted by descending score.
 /// An empty query returns the first `limit` files in their original order with score 0.
-pub fn search(files: &[IndexedFile], query: &str, limit: usize) -> Vec<SearchResult> {
+pub fn search(
+    files: &[Arc<Vec<IndexedFile>>],
+    query: &str,
+    limit: usize,
+) -> Vec<SearchResult> {
     if query.is_empty() {
         return files
             .iter()
+            .flat_map(|slice| slice.iter())
             .take(limit)
             .cloned()
             .map(|f| SearchResult { file: f, score: 0 })
@@ -28,6 +34,7 @@ pub fn search(files: &[IndexedFile], query: &str, limit: usize) -> Vec<SearchRes
 
     let mut scored: Vec<SearchResult> = files
         .iter()
+        .flat_map(|slice| slice.iter())
         .filter_map(|f| {
             let haystack = format!("{}/{}", f.folder_name, f.relative_path);
             let mut buf = Vec::new();
@@ -48,6 +55,10 @@ pub fn search(files: &[IndexedFile], query: &str, limit: usize) -> Vec<SearchRes
 mod tests {
     use super::*;
 
+    fn slices(files: Vec<IndexedFile>) -> Vec<Arc<Vec<IndexedFile>>> {
+        vec![Arc::new(files)]
+    }
+
     fn file(folder: &str, rel: &str) -> IndexedFile {
         IndexedFile {
             folder_id: "f".into(),
@@ -60,7 +71,7 @@ mod tests {
     #[test]
     fn empty_query_returns_all_up_to_limit() {
         let files = vec![file("v", "a.md"), file("v", "b.md"), file("v", "c.md")];
-        let r = search(&files, "", 2);
+        let r = search(&slices(files), "", 2);
         assert_eq!(r.len(), 2);
     }
 
@@ -71,7 +82,7 @@ mod tests {
             file("vault", "notes/scratch.md"),
             file("vault", "docs/guide/setup.md"),
         ];
-        let r = search(&files, "intro", 10);
+        let r = search(&slices(files), "intro", 10);
         assert!(!r.is_empty());
         assert!(r[0].file.relative_path.contains("intro"));
     }
@@ -83,7 +94,7 @@ mod tests {
             file("vault", "release-notes.md"),
             file("vault", "unrelated.md"),
         ];
-        let r = search(&files, "rel", 10);
+        let r = search(&slices(files), "rel", 10);
         assert!(r.len() >= 2);
         assert!(r.iter().all(|x| x.file.relative_path.contains("rel")));
     }
@@ -91,14 +102,14 @@ mod tests {
     #[test]
     fn no_matches_returns_empty() {
         let files = vec![file("v", "alpha.md")];
-        let r = search(&files, "zzzzzz_no_match", 10);
+        let r = search(&slices(files), "zzzzzz_no_match", 10);
         assert!(r.is_empty());
     }
 
     #[test]
     fn respects_limit() {
         let files: Vec<_> = (0..50).map(|i| file("v", &format!("file{i}.md"))).collect();
-        let r = search(&files, "file", 10);
+        let r = search(&slices(files), "file", 10);
         assert!(r.len() <= 10);
     }
 }

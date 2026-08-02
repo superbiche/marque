@@ -1,7 +1,9 @@
 use crate::error::AppResult;
-use ignore::WalkBuilder;
+use ignore::{WalkBuilder, WalkState};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc;
 
 pub const DEFAULT_IGNORES: &[&str] = &[
     ".git",
@@ -63,95 +65,115 @@ pub fn has_ignored_component(root: &Path, path: &Path) -> bool {
 /// The shared walk policy for tree construction and watcher directory
 /// enumeration. It intentionally uses the ignore crate's own gitignore
 /// handling instead of reproducing it from path names.
-pub fn folder_walk(root: &Path) -> ignore::Walk {
-    WalkBuilder::new(root)
+fn folder_walk_builder(root: &Path) -> WalkBuilder {
+    let mut builder = WalkBuilder::new(root);
+    builder
         .hidden(true)
         .git_ignore(true)
         .git_global(false)
         .filter_entry(|entry| {
             let name = entry.file_name().to_string_lossy();
             !(entry.depth() > 0 && is_ignored_dirname(&name))
-        })
-        .build()
+        });
+    builder
+}
+
+pub fn folder_walk(root: &Path) -> ignore::Walk {
+    folder_walk_builder(root).build()
 }
 
 /// Build the tree of markdown files for a folder root.
 /// Empty directories (no markdown descendants) are pruned.
 pub fn build_tree(root: &Path) -> AppResult<TreeNode> {
-    let walker = folder_walk(root);
+    let files = collect_markdown_files_parallel(root);
+    Ok(build_tree_from_files(root, files))
+}
 
-    // Collect files first.
-    let mut files: Vec<PathBuf> = Vec::new();
-    for dent in walker.flatten() {
-        let p = dent.path();
-        if p.is_file() && is_markdown(p) {
-            files.push(p.to_path_buf());
-        }
-    }
+fn collect_markdown_files_parallel(root: &Path) -> Vec<PathBuf> {
+    let (sender, receiver) = mpsc::channel();
+    folder_walk_builder(root).build_parallel().run(|| {
+        let sender = sender.clone();
+        Box::new(move |entry| {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_file() && is_markdown(path) {
+                    let _ = sender.send(path.to_path_buf());
+                }
+            }
+            WalkState::Continue
+        })
+    });
+    drop(sender);
+
+    let mut files: Vec<_> = receiver.into_iter().collect();
     files.sort();
+    files
+}
 
+#[cfg(test)]
+fn build_tree_serial(root: &Path) -> TreeNode {
+    let mut files = folder_walk(root)
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.is_file() && is_markdown(path)).then(|| path.to_path_buf())
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    build_tree_from_files(root, files)
+}
+
+fn build_tree_from_files(root: &Path, files: Vec<PathBuf>) -> TreeNode {
     let root_name = root
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("folder")
         .to_string();
 
-    let mut root_node = TreeNode {
-        name: root_name,
-        path: root.to_string_lossy().into_owned(),
-        is_dir: true,
-        children: Vec::new(),
-    };
+    let mut root_map = TreeMap::default();
 
     for f in files {
         let rel = match f.strip_prefix(root) {
             Ok(r) => r,
             Err(_) => continue,
         };
-        insert_path(&mut root_node, root, rel);
+        insert_path(&mut root_map, rel);
     }
 
+    let mut root_node = into_tree_node(root_name, root.to_path_buf(), true, root_map);
     sort_tree(&mut root_node);
-    Ok(root_node)
+    root_node
 }
 
-fn insert_path(node: &mut TreeNode, root: &Path, rel: &Path) {
-    let components: Vec<_> = rel
-        .components()
-        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+#[derive(Default)]
+struct TreeMap {
+    children: BTreeMap<String, TreeMap>,
+}
+
+fn insert_path(node: &mut TreeMap, rel: &Path) {
+    let mut current = node;
+    for component in rel.components() {
+        let name = component.as_os_str().to_string_lossy().into_owned();
+        current = current.children.entry(name).or_default();
+    }
+}
+
+fn into_tree_node(name: String, path: PathBuf, is_dir: bool, tree: TreeMap) -> TreeNode {
+    let children = tree
+        .children
+        .into_iter()
+        .map(|(name, tree)| {
+            let path = path.join(&name);
+            let is_dir = !tree.children.is_empty();
+            into_tree_node(name, path, is_dir, tree)
+        })
         .collect();
-    if components.is_empty() {
-        return;
+    TreeNode {
+        name,
+        path: path.to_string_lossy().into_owned(),
+        is_dir,
+        children,
     }
-    insert_components(node, root, &components, 0);
-}
-
-fn insert_components(node: &mut TreeNode, root: &Path, parts: &[String], idx: usize) {
-    if idx >= parts.len() {
-        return;
-    }
-    let part = &parts[idx];
-    let is_last = idx == parts.len() - 1;
-    let abs: PathBuf = root.join(parts[..=idx].iter().collect::<PathBuf>());
-
-    if let Some(existing) = node.children.iter_mut().find(|c| &c.name == part) {
-        if !is_last {
-            insert_components(existing, root, parts, idx + 1);
-        }
-        return;
-    }
-
-    let mut new_node = TreeNode {
-        name: part.clone(),
-        path: abs.to_string_lossy().into_owned(),
-        is_dir: !is_last,
-        children: Vec::new(),
-    };
-
-    if !is_last {
-        insert_components(&mut new_node, root, parts, idx + 1);
-    }
-    node.children.push(new_node);
 }
 
 fn sort_tree(node: &mut TreeNode) {
@@ -273,6 +295,31 @@ mod tests {
         assert!(tree.children[0].is_dir);
         assert_eq!(tree.children[0].name, "a_dir");
         assert_eq!(tree.children[1].name, "z_root.md");
+    }
+
+    #[test]
+    fn parallel_tree_matches_serial_tree() {
+        let dir = tempdir().unwrap();
+        touch(&dir.path().join("root.md"));
+        touch(&dir.path().join("docs/a.md"));
+        touch(&dir.path().join("docs/deep/b.markdown"));
+        touch(&dir.path().join("node_modules/ignored.md"));
+        assert_eq!(build_tree(dir.path()).unwrap(), build_tree_serial(dir.path()));
+    }
+
+    #[test]
+    fn tree_handles_wide_directories() {
+        let dir = tempdir().unwrap();
+        for index in 0..200 {
+            touch(&dir.path().join(format!("wide/file-{index:03}.md")));
+        }
+        let tree = build_tree(dir.path()).unwrap();
+        assert_eq!(tree.children.len(), 1);
+        assert_eq!(tree.children[0].name, "wide");
+        assert!(tree.children[0].is_dir);
+        assert_eq!(tree.children[0].children.len(), 200);
+        assert_eq!(tree.children[0].children[0].name, "file-000.md");
+        assert_eq!(tree.children[0].children[199].name, "file-199.md");
     }
 
     #[test]

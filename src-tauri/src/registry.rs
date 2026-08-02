@@ -19,7 +19,7 @@ pub struct FolderRegistry {
 struct Inner {
     settings: Settings,
     trees: HashMap<String, TreeNode>,
-    index_by_folder: HashMap<String, Vec<IndexedFile>>,
+    index_by_folder: HashMap<String, Arc<Vec<IndexedFile>>>,
 }
 
 #[derive(Default, Clone)]
@@ -96,20 +96,13 @@ impl FolderRegistry {
             .map(empty_tree)
     }
 
-    pub fn index_snapshot(&self) -> Vec<IndexedFile> {
+    pub fn index_snapshot(&self) -> Vec<Arc<Vec<IndexedFile>>> {
         let inner = self.inner.read();
         inner
             .settings
             .folders
             .iter()
-            .flat_map(|folder| {
-                inner
-                    .index_by_folder
-                    .get(&folder.id)
-                    .into_iter()
-                    .flatten()
-                    .cloned()
-            })
+            .filter_map(|folder| inner.index_by_folder.get(&folder.id).cloned())
             .collect()
     }
 
@@ -179,7 +172,7 @@ impl FolderRegistry {
         match rebuilt {
             Ok((tree, index)) => {
                 inner.trees.insert(folder.id.clone(), tree);
-                inner.index_by_folder.insert(folder.id, index);
+                inner.index_by_folder.insert(folder.id, Arc::new(index));
             }
             Err(_) => {
                 inner.trees.remove(&folder.id);
