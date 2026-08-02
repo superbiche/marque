@@ -42,7 +42,9 @@ Item numbers are stable; gaps in the sequence are consumed or deported items. Fo
 
 **Consumes when:** corrupt settings are renamed aside + surfaced, a top-level error boundary exists, backend errors reach a toast, and failed singletons retry.
 
-## 5. Runtime verification of the hygiene + Phase 1 + Phase 2 passes has not happened
+## 5. ~~Runtime verification of the hygiene + Phase 1 + Phase 2 passes has not happened~~ (CLOSED 2026-08-03)
+
+**Closed:** operator verified in a graphical session: homelabs re-added, app closed and relaunched in under 10 s with the sidebar lazy and the UI snappy throughout; ⌘K search instant while typing. No toasts appeared — which is the correct outcome: the ignore-pruned homelabs watch set (~9k dirs) is under the 10,000 cap so no watch-limit warning fires, and the corrupt-settings notice requires an actual parse failure. Operator ruled the pass complete ("everything holds").
 
 **Observation:** per repo convention (AGENTS.md Testing), rendering changes require an actual `pnpm tauri dev` run. The icon swaps (lucide X/Check/ChevronRight) and the first-run settings migration (`~/.local/share/marky` → `~/.config/marque`, plus one-time webview localStorage reset from the identifier change) are code-verified and unit-tested but never run visually. Phase 1 (2026-08-02) widened the surface: background hydration, the notification toasts, and the error boundary are likewise unverified in a real window (terra's headless `pnpm tauri dev` attempt built but produced no window). Phase 2 (same day) widened it again: syntax highlighting now runs on the Shiki v3 JS regex engine (`5b4bf6e`) and the sidebar lazy-loads trees per expanded folder (`cc741b6`) — confirm fenced code blocks (bash in WELCOME, plus a ts/python fence) render highlighted and the sidebar still populates. The homelabs re-add is the natural end-to-end test: re-register `/home/michel/dev/personal/infra/homelabs` (backup at `~/.agents/backups/marque/settings.json.pre-phase0-2026-08-02`) and confirm cold launch <2 s, sidebar populating progressively, no inotify burst, and ⌘K search staying snappy while typing (Arc'd index slices, `a101fd1`).
 
