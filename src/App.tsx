@@ -44,7 +44,6 @@ function AppShell() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchPaneId, setSearchPaneId] = useState<string | null>(null);
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
-  const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const {
     zoomIn, zoomOut, zoomReset,
@@ -57,8 +56,9 @@ function AppShell() {
   const isSplit = state.panes.length > 1;
 
   const refreshFolders = useCallback(async () => {
-    setFolders(await tauri.listFoldersGrouped());
-    setSidebarRefresh((n) => n + 1);
+    const list = await tauri.listFoldersGrouped();
+    setFolders(list);
+    return list;
   }, []);
 
   const openFile = useCallback(async (path: string) => {
@@ -76,7 +76,6 @@ function AppShell() {
     (async () => {
       const target = await tauri.getInitialTarget();
       if (target.kind === "file") openFile(target.path);
-      if (target.kind === "folder") setSidebarRefresh((n) => n + 1);
       refreshFolders();
     })();
   }, [openFile, refreshFolders]);
@@ -112,34 +111,24 @@ function AppShell() {
 
   // CLI re-target via single-instance.
   useEffect(() => {
-    const off = onCliTarget((t) => {
+    const off = onCliTarget(async (t) => {
       if (t.kind === "file") openFile(t.path);
       if (t.kind === "folder") {
-        // Sidebar will pick up the new folder via its own folder://changed
-        // listener, but we also bump refreshNonce and scroll it into view.
-        refreshFolders();
-        setTimeout(() => {
-          sidebarRef.current
-            ?.querySelector(`#folder-${cssEscape(folderIdFromPath(t.path) ?? "")}`)
-            ?.scrollIntoView({ block: "start" });
-        }, 100);
+        const list = await refreshFolders();
+        const folderId = list.find((folder) => folder.path === t.path)?.id;
+        if (folderId) {
+          setTimeout(() => {
+            sidebarRef.current
+              ?.querySelector(`#folder-${cssEscape(folderId)}`)
+              ?.scrollIntoView({ block: "start" });
+          }, 100);
+        }
       }
     });
     return () => {
       off.then((fn) => fn());
     };
   }, [openFile, refreshFolders]);
-
-  // Map a path back to a folder id for scroll-into-view (best-effort).
-  const [pathToFolderId, setPathToFolderId] = useState<Record<string, string>>({});
-  useEffect(() => {
-    const map: Record<string, string> = {};
-    for (const f of folders) map[f.path] = f.id;
-    setPathToFolderId(map);
-  }, [folders]);
-  function folderIdFromPath(p: string): string | null {
-    return pathToFolderId[p] ?? null;
-  }
 
   // Global keyboard shortcuts.
   useEffect(() => {
@@ -228,10 +217,10 @@ function AppShell() {
     <div className="flex h-full">
       <div ref={sidebarRef} className="flex h-full min-h-0 shrink-0" style={{ width: sidebarLeftWidth }}>
         <FolderSidebar
+          folders={folders}
           activePath={activeTab?.filePath}
           onOpenFile={openFile}
           onOpenPalette={() => setPaletteOpen(true)}
-          refreshNonce={sidebarRefresh}
         />
       </div>
       <ResizeHandle

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { tauri, onFolderChanged, type AnnotatedFolder, type TreeNode } from "@/lib/tauri";
 import { usePreferences } from "@/lib/preferences";
@@ -15,10 +15,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 
 interface Props {
+  folders: AnnotatedFolder[];
   activePath?: string;
   onOpenFile: (absolutePath: string) => void;
   onOpenPalette: () => void;
-  refreshNonce?: number;
 }
 
 interface RepoGroup {
@@ -48,60 +48,84 @@ function groupByRepo(folders: AnnotatedFolder[]): RepoGroup[] {
   return groups;
 }
 
-export function FolderSidebar({ activePath, onOpenFile, onOpenPalette, refreshNonce }: Props) {
-  const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
+export function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }: Props) {
   const [trees, setTrees] = useState<Record<string, TreeNode>>({});
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const treesRef = useRef(trees);
+  const collapsedRef = useRef(collapsed);
+  const folderIdsRef = useRef(new Set<string>());
+  const loadingTreeIdsRef = useRef(new Set<string>());
   const { sidebarGroupByRepo, setSidebarGroupByRepo } = usePreferences();
 
-  const loadAll = useCallback(async () => {
-    const list = await tauri.listFoldersGrouped();
-    setFolders(list);
-    const newTrees: Record<string, TreeNode> = {};
-    await Promise.all(
-      list.map(async (f) => {
-        try {
-          newTrees[f.id] = await tauri.readFolderTree(f.id);
-        } catch {
-          // unreadable folder
-        }
-      })
-    );
-    setTrees(newTrees);
+  const loadTree = useCallback(async (folderId: string, force = false) => {
+    if ((!force && treesRef.current[folderId]) || loadingTreeIdsRef.current.has(folderId)) {
+      return;
+    }
+
+    loadingTreeIdsRef.current.add(folderId);
+    try {
+      const tree = await tauri.readFolderTree(folderId);
+      const next = { ...treesRef.current, [folderId]: tree };
+      treesRef.current = next;
+      setTrees((previous) => ({ ...previous, [folderId]: tree }));
+    } catch {
+      // unreadable folder
+    } finally {
+      loadingTreeIdsRef.current.delete(folderId);
+    }
   }, []);
 
   useEffect(() => {
-    loadAll();
-  }, [loadAll, refreshNonce]);
+    collapsedRef.current = collapsed;
+  }, [collapsed]);
 
   useEffect(() => {
-    const off = onFolderChanged(async (folderId) => {
-      try {
-        const tree = await tauri.readFolderTree(folderId);
-        setTrees((prev) => ({ ...prev, [folderId]: tree }));
-      } catch {
-        // ignore
+    const folderIds = new Set(folders.map((folder) => folder.id));
+    folderIdsRef.current = folderIds;
+    const next = Object.fromEntries(
+      Object.entries(treesRef.current).filter(([folderId]) => folderIds.has(folderId))
+    );
+    if (Object.keys(next).length !== Object.keys(treesRef.current).length) {
+      treesRef.current = next;
+      setTrees(next);
+    }
+  }, [folders]);
+
+  useEffect(() => {
+    for (const folder of folders) {
+      if (!collapsed[folder.id] && !treesRef.current[folder.id]) {
+        void loadTree(folder.id);
       }
-      const list = await tauri.listFoldersGrouped();
-      setFolders(list);
+    }
+  }, [collapsed, folders, loadTree]);
+
+  useEffect(() => {
+    const off = onFolderChanged((folderId) => {
+      if (!folderIdsRef.current.has(folderId) || collapsedRef.current[folderId]) {
+        if (!treesRef.current[folderId]) return;
+        const { [folderId]: _, ...next } = treesRef.current;
+        treesRef.current = next;
+        setTrees(next);
+        return;
+      }
+
+      void loadTree(folderId, true);
     });
     return () => {
       off.then((fn) => fn());
     };
-  }, []);
+  }, [loadTree]);
 
   const handleAdd = async () => {
     const picked = await openDialog({ directory: true, multiple: false });
     if (typeof picked === "string") {
       await tauri.addFolder(picked);
-      await loadAll();
     }
   };
 
   const handleRemove = async (id: string) => {
     await tauri.removeFolder(id);
-    await loadAll();
   };
 
   const renderFolder = (f: AnnotatedFolder) => {
