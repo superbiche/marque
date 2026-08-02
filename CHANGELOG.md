@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Hard fork - 2026-08-02
+
+Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
+
 ## [Unreleased]
 
 ### Added
