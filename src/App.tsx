@@ -20,7 +20,7 @@ import {
 } from "@/lib/workspace";
 import { cn } from "@/lib/utils";
 
-const WELCOME = `# Welcome to Marky
+const WELCOME = `# Welcome to Marque
 
 A fast markdown viewer with folder support.
 
@@ -33,8 +33,8 @@ A fast markdown viewer with folder support.
 Launch from the terminal:
 
 \`\`\`bash
-marky README.md       # open a file
-marky ./docs/         # open a folder (auto-saved)
+marque README.md       # open a file
+marque ./docs/         # open a folder (auto-saved)
 \`\`\`
 `;
 

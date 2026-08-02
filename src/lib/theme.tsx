@@ -2,7 +2,7 @@ import * as React from "react";
 
 export type Theme = "light" | "dark" | "system";
 
-const STORAGE_KEY = "marky:theme";
+const STORAGE_KEY = "marque:theme";
 
 interface Ctx {
   theme: Theme;

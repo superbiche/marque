@@ -9,7 +9,7 @@ export interface Preferences {
   sidebarGroupByRepo: boolean;
 }
 
-const STORAGE_KEY = "marky:preferences";
+const STORAGE_KEY = "marque:preferences";
 
 const DEFAULTS: Preferences = {
   copyAsMarkdown: true,

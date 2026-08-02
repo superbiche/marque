@@ -3,7 +3,7 @@ use crate::error::{AppError, AppResult};
 use crate::folder::TreeNode;
 use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
-use crate::settings::{data_dir, Folder};
+use crate::settings::{settings_dir, Folder};
 use crate::watcher::{watch_folder, SharedWatchers};
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ pub fn set_initial_target(target: InitialTarget, state: State<'_, InitialTargetS
 pub fn read_file(path: String, registry: State<'_, SharedRegistry>) -> AppResult<String> {
     let contents = crate::fs::read_text(&path)?;
     registry.push_recent(path);
-    let _ = registry.save(&data_dir());
+    let _ = registry.save(&settings_dir());
     Ok(contents)
 }
 
@@ -74,7 +74,7 @@ pub fn add_folder(
     watchers: State<'_, SharedWatchers>,
 ) -> AppResult<Folder> {
     let folder = registry.add_folder(PathBuf::from(&path))?;
-    registry.save(&data_dir())?;
+    registry.save(&settings_dir())?;
     if let Ok(handle) = watch_folder(
         app.clone(),
         Arc::clone(&registry),
@@ -96,7 +96,7 @@ pub fn remove_folder(
 ) -> AppResult<()> {
     registry.remove_folder(&id);
     watchers.remove(&id);
-    registry.save(&data_dir())?;
+    registry.save(&settings_dir())?;
     let _ = app.emit("folder://changed", &id);
     Ok(())
 }
@@ -135,7 +135,7 @@ pub fn get_recent_files(registry: State<'_, SharedRegistry>) -> Vec<String> {
 
 #[tauri::command]
 pub fn save_theme(theme: String, registry: State<'_, SharedRegistry>) -> AppResult<()> {
-    registry.save_with(&data_dir(), |s| s.theme = Some(theme))
+    registry.save_with(&settings_dir(), |s| s.theme = Some(theme))
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -152,7 +152,7 @@ pub fn save_preferences(
     prefs: PreferencesPayload,
     registry: State<'_, SharedRegistry>,
 ) -> AppResult<()> {
-    registry.save_with(&data_dir(), |s| {
+    registry.save_with(&settings_dir(), |s| {
         s.zoom = prefs.zoom;
         s.sidebar_left_width = prefs.sidebar_left_width;
         s.sidebar_right_width = prefs.sidebar_right_width;

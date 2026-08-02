@@ -11,9 +11,9 @@ pub enum InitialTarget {
 
 /// Resolve a CLI argv into an InitialTarget.
 ///
-/// - `marky FILE.md` → File
-/// - `marky DIR/`     → Folder
-/// - `marky` (none)   → None
+/// - `marque FILE.md` → File
+/// - `marque DIR/`     → Folder
+/// - `marque` (none)   → None
 /// - missing path     → None (we don't error; user gets empty state)
 pub fn resolve(args: &[String]) -> InitialTarget {
     let raw = match args.iter().skip(1).find(|a| !a.starts_with("--")) {
@@ -52,13 +52,13 @@ mod tests {
 
     #[test]
     fn resolves_no_args_to_none() {
-        let args = vec!["marky".to_string()];
+        let args = vec!["marque".to_string()];
         assert_eq!(resolve(&args), InitialTarget::None);
     }
 
     #[test]
     fn resolves_missing_path_to_none() {
-        let args = vec!["marky".into(), "/nonexistent/path/xyz123".into()];
+        let args = vec!["marque".into(), "/nonexistent/path/xyz123".into()];
         assert_eq!(resolve(&args), InitialTarget::None);
     }
 
@@ -67,7 +67,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let p = dir.path().join("a.md");
         fs::write(&p, "# hi").unwrap();
-        let args = vec!["marky".into(), p.to_string_lossy().into_owned()];
+        let args = vec!["marque".into(), p.to_string_lossy().into_owned()];
         match resolve(&args) {
             InitialTarget::File { path } => assert!(path.ends_with("a.md")),
             other => panic!("expected file, got {:?}", other),
@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn resolves_dir_to_folder() {
         let dir = tempdir().unwrap();
-        let args = vec!["marky".into(), dir.path().to_string_lossy().into_owned()];
+        let args = vec!["marque".into(), dir.path().to_string_lossy().into_owned()];
         matches!(resolve(&args), InitialTarget::Folder { .. });
     }
 
@@ -87,7 +87,7 @@ mod tests {
         let p = dir.path().join("b.md");
         fs::write(&p, "x").unwrap();
         let args = vec![
-            "marky".into(),
+            "marque".into(),
             "--debug".into(),
             p.to_string_lossy().into_owned(),
         ];

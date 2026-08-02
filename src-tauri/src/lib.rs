@@ -11,7 +11,7 @@ mod watcher;
 use commands::InitialTargetState;
 use parking_lot::Mutex;
 use registry::{FolderRegistry, SharedRegistry};
-use settings::{data_dir, Settings};
+use settings::{settings_dir, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
@@ -28,7 +28,7 @@ fn handle_target(app: &tauri::AppHandle, target: cli::InitialTarget) {
                 app.try_state::<SharedWatchers>(),
             ) {
                 if let Ok(folder) = reg.add_folder(PathBuf::from(path)) {
-                    let _ = reg.save(&data_dir());
+                    let _ = reg.save(&settings_dir());
                     if let Ok(w) = watch_folder(
                         app.clone(),
                         Arc::clone(&*reg),
@@ -69,7 +69,8 @@ pub fn run() {
             handle_target(app, cli::resolve(&argv));
         }))
         .setup(move |app| {
-            let dir = data_dir();
+            settings::migrate_legacy_settings();
+            let dir = settings_dir();
             let settings = Settings::load(&dir).unwrap_or_default();
             let registry: SharedRegistry = Arc::new(FolderRegistry::from_settings(settings));
             let watchers: SharedWatchers = Arc::new(Watchers::default());
@@ -131,15 +132,15 @@ pub fn run() {
         .expect("error while building tauri application");
 
     // Handle macOS file-open events (Finder "Open With", Dock drag-drop,
-    // `open /path/to/file.md` when Marky is the default handler).
-    app.run(|app_handle, event| {
+    // `open /path/to/file.md` when Marque is the default handler).
+    app.run(|_app_handle, _event| {
         #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Opened { urls } = event {
+        if let tauri::RunEvent::Opened { urls } = _event {
             for url in urls {
                 if let Ok(path) = url.to_file_path() {
                     let target = cli::classify(&path);
                     if target != cli::InitialTarget::None {
-                        handle_target(app_handle, target);
+                        handle_target(_app_handle, target);
                         break;
                     }
                 }

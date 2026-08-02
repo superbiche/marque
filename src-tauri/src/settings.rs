@@ -77,10 +77,55 @@ impl Settings {
     }
 }
 
-pub fn data_dir() -> PathBuf {
+/// Settings directory: `~/.config/marque` (XDG config dir).
+pub fn settings_dir() -> PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("marque")
+}
+
+/// Legacy settings directory used by the upstream marky builds:
+/// `~/.local/share/marky` (XDG data dir).
+fn legacy_settings_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("marky")
+}
+
+/// One-time first-run migration: if no settings exist at the new location but
+/// a legacy marky settings.json does, copy it over. The old file is never
+/// deleted. Call before `Settings::load`.
+pub fn migrate_legacy_settings() {
+    migrate_legacy_settings_between(&legacy_settings_dir(), &settings_dir());
+}
+
+fn migrate_legacy_settings_between(old_dir: &Path, new_dir: &Path) {
+    let new_file = new_dir.join(FILE_NAME);
+    if new_file.exists() {
+        return;
+    }
+    let old_file = old_dir.join(FILE_NAME);
+    if !old_file.exists() {
+        return;
+    }
+    if let Err(e) = std::fs::create_dir_all(new_dir) {
+        eprintln!(
+            "marque: failed to create settings dir {}: {e}",
+            new_dir.display()
+        );
+        return;
+    }
+    match std::fs::copy(&old_file, &new_file) {
+        Ok(_) => eprintln!(
+            "marque: migrated legacy settings from {} to {}",
+            old_file.display(),
+            new_file.display()
+        ),
+        Err(e) => eprintln!(
+            "marque: failed to migrate legacy settings from {}: {e}",
+            old_file.display()
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -167,6 +212,53 @@ mod tests {
         std::fs::write(dir.path().join("settings.json"), "{not json").unwrap();
         let s = Settings::load(dir.path()).unwrap();
         assert!(s.folders.is_empty());
+    }
+
+    #[test]
+    fn migrates_legacy_settings_when_new_location_empty() {
+        let old = tempdir().unwrap();
+        let new = tempdir().unwrap();
+        let new_dir = new.path().join("marque");
+        let raw = r#"{"folders":[{"id":"f1","name":"a","path":"/tmp/a","added_at":"0"}]}"#;
+        std::fs::write(old.path().join(FILE_NAME), raw).unwrap();
+
+        migrate_legacy_settings_between(old.path(), &new_dir);
+
+        let s = Settings::load(&new_dir).unwrap();
+        assert_eq!(s.folders.len(), 1);
+        assert_eq!(s.folders[0].id, "f1");
+        // Old file is preserved, never deleted.
+        assert!(old.path().join(FILE_NAME).exists());
+    }
+
+    #[test]
+    fn migration_does_not_overwrite_existing_settings() {
+        let old = tempdir().unwrap();
+        let new = tempdir().unwrap();
+        std::fs::write(
+            old.path().join(FILE_NAME),
+            r#"{"folders":[{"id":"old","name":"o","path":"/tmp/o","added_at":"0"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            new.path().join(FILE_NAME),
+            r#"{"folders":[{"id":"new","name":"n","path":"/tmp/n","added_at":"0"}]}"#,
+        )
+        .unwrap();
+
+        migrate_legacy_settings_between(old.path(), new.path());
+
+        let s = Settings::load(new.path()).unwrap();
+        assert_eq!(s.folders.len(), 1);
+        assert_eq!(s.folders[0].id, "new");
+    }
+
+    #[test]
+    fn migration_noop_when_no_legacy_file() {
+        let old = tempdir().unwrap();
+        let new = tempdir().unwrap();
+        migrate_legacy_settings_between(old.path(), new.path());
+        assert!(!new.path().join(FILE_NAME).exists());
     }
 
     #[test]
