@@ -15,7 +15,7 @@ use settings::{settings_dir, Settings};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::Manager;
-use watcher::{watch_folder, SharedWatchers, Watchers};
+use watcher::{hydrate_folder, hydrate_folders, SharedWatchers, Watchers};
 
 /// Handle a new CLI target from either single-instance forwarding or macOS
 /// file-open events: register folders, update managed state, emit to frontend,
@@ -27,15 +27,15 @@ fn handle_target(app: &tauri::AppHandle, target: cli::InitialTarget) {
                 app.try_state::<SharedRegistry>(),
                 app.try_state::<SharedWatchers>(),
             ) {
-                if let Ok(folder) = reg.add_folder(PathBuf::from(path)) {
+                if let Ok((folder, added)) = reg.add_folder_with_status(PathBuf::from(path)) {
                     let _ = reg.save(&settings_dir());
-                    if let Ok(w) = watch_folder(
-                        app.clone(),
-                        Arc::clone(&*reg),
-                        folder.id.clone(),
-                        PathBuf::from(&folder.path),
-                    ) {
-                        watchers.insert(folder.id.clone(), w);
+                    if added {
+                        hydrate_folder(
+                            app.clone(),
+                            Arc::clone(&*reg),
+                            Arc::clone(&*watchers),
+                            folder.clone(),
+                        );
                     }
                     cli::InitialTarget::Folder { path: folder.path }
                 } else {
@@ -75,32 +75,12 @@ pub fn run() {
             let registry: SharedRegistry = Arc::new(FolderRegistry::from_settings(settings));
             let watchers: SharedWatchers = Arc::new(Watchers::default());
 
-            let handle = app.handle().clone();
-            for folder in registry.folders() {
-                if let Ok(w) = watch_folder(
-                    handle.clone(),
-                    Arc::clone(&registry),
-                    folder.id.clone(),
-                    PathBuf::from(&folder.path),
-                ) {
-                    watchers.insert(folder.id.clone(), w);
-                }
-            }
-
             let initial_resolved = match &initial {
                 cli::InitialTarget::Folder { path } => {
-                    match registry.add_folder(PathBuf::from(path)) {
-                        Ok(v) => {
+                    match registry.add_folder_with_status(PathBuf::from(path)) {
+                        Ok((folder, _)) => {
                             let _ = registry.save(&dir);
-                            if let Ok(w) = watch_folder(
-                                handle.clone(),
-                                Arc::clone(&registry),
-                                v.id.clone(),
-                                PathBuf::from(&v.path),
-                            ) {
-                                watchers.insert(v.id.clone(), w);
-                            }
-                            cli::InitialTarget::Folder { path: v.path }
+                            cli::InitialTarget::Folder { path: folder.path }
                         }
                         Err(_) => cli::InitialTarget::None,
                     }
@@ -109,8 +89,9 @@ pub fn run() {
             };
 
             app.manage(InitialTargetState(Mutex::new(initial_resolved)));
-            app.manage(registry);
-            app.manage(watchers);
+            app.manage(Arc::clone(&registry));
+            app.manage(Arc::clone(&watchers));
+            hydrate_folders(app.handle().clone(), registry, watchers);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

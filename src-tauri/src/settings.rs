@@ -35,6 +35,7 @@ pub struct Settings {
     pub sidebar_group_by_repo: Option<bool>,
 }
 
+#[cfg(test)]
 const RECENT_LIMIT: usize = 20;
 const FILE_NAME: &str = "settings.json";
 
@@ -58,6 +59,7 @@ impl Settings {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn push_recent(&mut self, path: String) {
         self.recent_files.retain(|p| p != &path);
         self.recent_files.insert(0, path.clone());

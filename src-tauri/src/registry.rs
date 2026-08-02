@@ -1,54 +1,126 @@
 use crate::error::{AppError, AppResult};
 use crate::folder::{build_tree, flatten_files, IndexedFile, TreeNode};
 use crate::settings::{Folder, Settings};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// In-memory registry: folder metadata + each folder's tree + the flat search index.
-/// Persistence is delegated to `Settings`; the registry owns the live, hydrated state.
-#[derive(Default)]
+/// In-memory registry: persisted folder metadata plus hydrated trees and a
+/// per-folder search-index slice. Folders begin unhydrated so setup can return
+/// without walking their contents.
 pub struct FolderRegistry {
     inner: RwLock<Inner>,
+    recents: Mutex<RecentFiles>,
+    save_lock: Mutex<()>,
 }
 
 #[derive(Default)]
 struct Inner {
     settings: Settings,
     trees: HashMap<String, TreeNode>,
-    index: Vec<IndexedFile>,
+    index_by_folder: HashMap<String, Vec<IndexedFile>>,
+}
+
+#[derive(Default, Clone)]
+struct RecentFiles {
+    last_opened_file: Option<String>,
+    files: Vec<String>,
+}
+
+impl RecentFiles {
+    fn from_settings(settings: &Settings) -> Self {
+        Self {
+            last_opened_file: settings.last_opened_file.clone(),
+            files: settings.recent_files.clone(),
+        }
+    }
+
+    fn apply_to(&self, settings: &mut Settings) {
+        settings.last_opened_file = self.last_opened_file.clone();
+        settings.recent_files = self.files.clone();
+    }
+
+    fn push(&mut self, path: String) {
+        self.files.retain(|existing| existing != &path);
+        self.files.insert(0, path.clone());
+        self.files.truncate(20);
+        self.last_opened_file = Some(path);
+    }
 }
 
 impl FolderRegistry {
+    /// Construct metadata-only state. Hydration is explicitly scheduled by
+    /// the application after managed state is available.
     pub fn from_settings(settings: Settings) -> Self {
-        let mut inner = Inner {
-            settings,
-            ..Default::default()
-        };
-        inner.rebuild_all();
+        let recents = RecentFiles::from_settings(&settings);
         Self {
-            inner: RwLock::new(inner),
+            inner: RwLock::new(Inner {
+                settings,
+                ..Default::default()
+            }),
+            recents: Mutex::new(recents),
+            save_lock: Mutex::new(()),
         }
     }
 
     pub fn settings(&self) -> Settings {
-        self.inner.read().settings.clone()
+        let mut settings = self.inner.read().settings.clone();
+        self.recents.lock().apply_to(&mut settings);
+        settings
     }
 
     pub fn folders(&self) -> Vec<Folder> {
         self.inner.read().settings.folders.clone()
     }
 
-    pub fn tree(&self, folder_id: &str) -> Option<TreeNode> {
-        self.inner.read().trees.get(folder_id).cloned()
+    pub fn contains_folder(&self, folder_id: &str) -> bool {
+        self.inner
+            .read()
+            .settings
+            .folders
+            .iter()
+            .any(|folder| folder.id == folder_id)
+    }
+
+    pub fn tree_or_empty(&self, folder_id: &str) -> Option<TreeNode> {
+        let inner = self.inner.read();
+        if let Some(tree) = inner.trees.get(folder_id) {
+            return Some(tree.clone());
+        }
+        inner
+            .settings
+            .folders
+            .iter()
+            .find(|folder| folder.id == folder_id)
+            .map(empty_tree)
     }
 
     pub fn index_snapshot(&self) -> Vec<IndexedFile> {
-        self.inner.read().index.clone()
+        let inner = self.inner.read();
+        inner
+            .settings
+            .folders
+            .iter()
+            .flat_map(|folder| {
+                inner
+                    .index_by_folder
+                    .get(&folder.id)
+                    .into_iter()
+                    .flatten()
+                    .cloned()
+            })
+            .collect()
     }
 
+    #[cfg(test)]
     pub fn add_folder(&self, path: PathBuf) -> AppResult<Folder> {
+        self.add_folder_with_status(path).map(|(folder, _)| folder)
+    }
+
+    /// Register a folder without walking it. The boolean is true only when
+    /// the folder was newly added and therefore needs hydration scheduled.
+    pub fn add_folder_with_status(&self, path: PathBuf) -> AppResult<(Folder, bool)> {
         let abs = std::fs::canonicalize(&path)?;
         if !abs.is_dir() {
             return Err(AppError::Invalid("folder path is not a directory".into()));
@@ -56,13 +128,18 @@ impl FolderRegistry {
         let path_str = abs.to_str().ok_or(AppError::NonUtf8Path)?.to_string();
         let name = abs
             .file_name()
-            .and_then(|n| n.to_str())
+            .and_then(|name| name.to_str())
             .unwrap_or("folder")
             .to_string();
 
-        let mut guard = self.inner.write();
-        if let Some(existing) = guard.settings.folders.iter().find(|v| v.path == path_str) {
-            return Ok(existing.clone());
+        let mut inner = self.inner.write();
+        if let Some(existing) = inner
+            .settings
+            .folders
+            .iter()
+            .find(|folder| folder.path == path_str)
+        {
+            return Ok((existing.clone(), false));
         }
 
         let folder = Folder {
@@ -71,76 +148,99 @@ impl FolderRegistry {
             path: path_str,
             added_at: chrono_now(),
         };
-        guard.settings.add_folder(folder.clone());
-        guard.rebuild_one(&folder);
-        Ok(folder)
+        inner.settings.add_folder(folder.clone());
+        Ok((folder, true))
     }
 
     pub fn remove_folder(&self, id: &str) {
-        let mut guard = self.inner.write();
-        guard.settings.remove_folder(id);
-        guard.trees.remove(id);
-        guard.rebuild_index();
+        let mut inner = self.inner.write();
+        inner.settings.remove_folder(id);
+        inner.trees.remove(id);
+        inner.index_by_folder.remove(id);
     }
 
+    /// Rebuild one folder without holding the registry write lock during the
+    /// filesystem walk. The final swap updates only that folder's index slice.
     pub fn refresh_folder(&self, id: &str) {
-        let mut guard = self.inner.write();
-        let folder = match guard.settings.folders.iter().find(|v| v.id == id).cloned() {
-            Some(v) => v,
-            None => return,
+        let Some(folder) = self.folder(id) else {
+            return;
         };
-        guard.rebuild_one(&folder);
+        let root = PathBuf::from(&folder.path);
+        let rebuilt = build_tree(&root).map(|tree| {
+            let mut index = Vec::new();
+            flatten_files(&folder.id, &folder.name, &root, &tree, &mut index);
+            (tree, index)
+        });
+
+        let mut inner = self.inner.write();
+        if !inner.settings.folders.iter().any(|current| current.id == folder.id) {
+            return;
+        }
+        match rebuilt {
+            Ok((tree, index)) => {
+                inner.trees.insert(folder.id.clone(), tree);
+                inner.index_by_folder.insert(folder.id, index);
+            }
+            Err(_) => {
+                inner.trees.remove(&folder.id);
+                inner.index_by_folder.remove(&folder.id);
+            }
+        }
     }
 
     pub fn push_recent(&self, path: String) {
-        self.inner.write().settings.push_recent(path);
+        self.recents.lock().push(path);
     }
 
-    pub fn save(&self, dir: &std::path::Path) -> AppResult<()> {
-        self.inner.read().settings.save(dir)
+    /// Persist recents off the command path. This only takes the separate
+    /// recents lock before spawning, so opening a document never queues behind
+    /// a tree rebuild's registry write lock.
+    pub fn persist_async(self: &Arc<Self>, dir: PathBuf) {
+        let registry = Arc::clone(self);
+        std::thread::spawn(move || {
+            if let Err(error) = registry.save(&dir) {
+                eprintln!("marque: failed to save recent files: {error}");
+            }
+        });
+    }
+
+    pub fn save(&self, dir: &Path) -> AppResult<()> {
+        let _save = self.save_lock.lock();
+        self.snapshot_settings().save(dir)
     }
 
     pub fn save_with(
         &self,
-        dir: &std::path::Path,
+        dir: &Path,
         mutate: impl FnOnce(&mut Settings),
     ) -> AppResult<()> {
-        let mut guard = self.inner.write();
-        mutate(&mut guard.settings);
-        guard.settings.save(dir)
+        mutate(&mut self.inner.write().settings);
+        self.save(dir)
+    }
+
+    fn folder(&self, id: &str) -> Option<Folder> {
+        self.inner
+            .read()
+            .settings
+            .folders
+            .iter()
+            .find(|folder| folder.id == id)
+            .cloned()
+    }
+
+    fn snapshot_settings(&self) -> Settings {
+        let mut settings = self.inner.read().settings.clone();
+        self.recents.lock().apply_to(&mut settings);
+        settings
     }
 }
 
-impl Inner {
-    fn rebuild_all(&mut self) {
-        self.trees.clear();
-        let folders = self.settings.folders.clone();
-        for v in &folders {
-            self.rebuild_one(v);
-        }
-    }
-
-    fn rebuild_one(&mut self, folder: &Folder) {
-        let root = PathBuf::from(&folder.path);
-        match build_tree(&root) {
-            Ok(tree) => {
-                self.trees.insert(folder.id.clone(), tree);
-            }
-            Err(_) => {
-                self.trees.remove(&folder.id);
-            }
-        }
-        self.rebuild_index();
-    }
-
-    fn rebuild_index(&mut self) {
-        self.index.clear();
-        for v in &self.settings.folders {
-            if let Some(tree) = self.trees.get(&v.id) {
-                let root = PathBuf::from(&v.path);
-                flatten_files(&v.id, &v.name, &root, tree, &mut self.index);
-            }
-        }
+fn empty_tree(folder: &Folder) -> TreeNode {
+    TreeNode {
+        name: folder.name.clone(),
+        path: folder.path.clone(),
+        is_dir: true,
+        children: Vec::new(),
     }
 }
 
@@ -150,7 +250,7 @@ fn chrono_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs().to_string())
+        .map(|duration| duration.as_secs().to_string())
         .unwrap_or_default()
 }
 
@@ -161,52 +261,81 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn add_folder_indexes_files() {
+    fn saved_folders_start_unhydrated() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("a.md"), "x").unwrap();
-        fs::create_dir_all(dir.path().join("sub")).unwrap();
-        fs::write(dir.path().join("sub/b.md"), "y").unwrap();
+        let settings = Settings {
+            folders: vec![Folder {
+                id: "f1".into(),
+                name: "folder".into(),
+                path: dir.path().to_string_lossy().into_owned(),
+                added_at: "now".into(),
+            }],
+            ..Default::default()
+        };
 
-        let reg = FolderRegistry::from_settings(Settings::default());
-        let v = reg.add_folder(dir.path().to_path_buf()).unwrap();
+        let registry = FolderRegistry::from_settings(settings);
+        assert!(registry.index_snapshot().is_empty());
+        assert_eq!(registry.tree_or_empty("f1").unwrap().children.len(), 0);
+        assert!(registry.tree_or_empty("missing").is_none());
+    }
 
-        let idx = reg.index_snapshot();
-        assert_eq!(idx.len(), 2);
-        assert!(idx.iter().all(|f| f.folder_id == v.id));
+    #[test]
+    fn add_folder_requires_explicit_hydration() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.md"), "x").unwrap();
+
+        let registry = FolderRegistry::from_settings(Settings::default());
+        let folder = registry.add_folder(dir.path().to_path_buf()).unwrap();
+        assert!(registry.index_snapshot().is_empty());
+        registry.refresh_folder(&folder.id);
+        assert_eq!(registry.index_snapshot().len(), 1);
     }
 
     #[test]
     fn remove_folder_drops_index_entries() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("a.md"), "x").unwrap();
-        let reg = FolderRegistry::from_settings(Settings::default());
-        let v = reg.add_folder(dir.path().to_path_buf()).unwrap();
-        assert!(!reg.index_snapshot().is_empty());
-        reg.remove_folder(&v.id);
-        assert!(reg.index_snapshot().is_empty());
-        assert!(reg.tree(&v.id).is_none());
+        let registry = FolderRegistry::from_settings(Settings::default());
+        let folder = registry.add_folder(dir.path().to_path_buf()).unwrap();
+        registry.refresh_folder(&folder.id);
+        assert!(!registry.index_snapshot().is_empty());
+        registry.remove_folder(&folder.id);
+        assert!(registry.index_snapshot().is_empty());
+        assert!(registry.tree_or_empty(&folder.id).is_none());
     }
 
     #[test]
     fn add_same_folder_twice_dedups() {
         let dir = tempdir().unwrap();
-        fs::write(dir.path().join("a.md"), "x").unwrap();
-        let reg = FolderRegistry::from_settings(Settings::default());
-        let v1 = reg.add_folder(dir.path().to_path_buf()).unwrap();
-        let v2 = reg.add_folder(dir.path().to_path_buf()).unwrap();
-        assert_eq!(v1.id, v2.id);
-        assert_eq!(reg.folders().len(), 1);
+        let registry = FolderRegistry::from_settings(Settings::default());
+        let first = registry.add_folder(dir.path().to_path_buf()).unwrap();
+        let second = registry.add_folder(dir.path().to_path_buf()).unwrap();
+        assert_eq!(first.id, second.id);
+        assert_eq!(registry.folders().len(), 1);
     }
 
     #[test]
-    fn refresh_picks_up_new_files() {
-        let dir = tempdir().unwrap();
-        fs::write(dir.path().join("a.md"), "x").unwrap();
-        let reg = FolderRegistry::from_settings(Settings::default());
-        let v = reg.add_folder(dir.path().to_path_buf()).unwrap();
-        assert_eq!(reg.index_snapshot().len(), 1);
-        fs::write(dir.path().join("new.md"), "z").unwrap();
-        reg.refresh_folder(&v.id);
-        assert_eq!(reg.index_snapshot().len(), 2);
+    fn refresh_replaces_only_the_changed_folder_index_slice() {
+        let first_dir = tempdir().unwrap();
+        let second_dir = tempdir().unwrap();
+        fs::write(first_dir.path().join("a.md"), "x").unwrap();
+        fs::write(second_dir.path().join("b.md"), "y").unwrap();
+
+        let registry = FolderRegistry::from_settings(Settings::default());
+        let first = registry.add_folder(first_dir.path().to_path_buf()).unwrap();
+        let second = registry.add_folder(second_dir.path().to_path_buf()).unwrap();
+        registry.refresh_folder(&first.id);
+        registry.refresh_folder(&second.id);
+        fs::write(first_dir.path().join("new.md"), "z").unwrap();
+        registry.refresh_folder(&first.id);
+
+        let inner = registry.inner.read();
+        assert_eq!(inner.index_by_folder[&first.id].len(), 2);
+        assert_eq!(inner.index_by_folder[&second.id].len(), 1);
+        assert_eq!(
+            inner.index_by_folder[&second.id][0].relative_path,
+            "b.md"
+        );
     }
 }

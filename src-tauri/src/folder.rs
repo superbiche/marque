@@ -41,14 +41,30 @@ pub fn is_markdown(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn is_ignored_dirname(name: &str) -> bool {
+pub fn is_ignored_dirname(name: &str) -> bool {
     name.starts_with('.') || DEFAULT_IGNORES.contains(&name)
 }
 
-/// Build the tree of markdown files for a folder root.
-/// Empty directories (no markdown descendants) are pruned.
-pub fn build_tree(root: &Path) -> AppResult<TreeNode> {
-    let walker = WalkBuilder::new(root)
+/// True when a path below `root` has a hidden or default-ignored component.
+/// The root itself is allowed so a selected hidden-named folder still has a
+/// usable empty/loading representation.
+pub fn has_ignored_component(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return true;
+    };
+    relative.components().any(|component| {
+        let std::path::Component::Normal(name) = component else {
+            return false;
+        };
+        is_ignored_dirname(&name.to_string_lossy())
+    })
+}
+
+/// The shared walk policy for tree construction and watcher directory
+/// enumeration. It intentionally uses the ignore crate's own gitignore
+/// handling instead of reproducing it from path names.
+pub fn folder_walk(root: &Path) -> ignore::Walk {
+    WalkBuilder::new(root)
         .hidden(true)
         .git_ignore(true)
         .git_global(false)
@@ -56,7 +72,13 @@ pub fn build_tree(root: &Path) -> AppResult<TreeNode> {
             let name = entry.file_name().to_string_lossy();
             !(entry.depth() > 0 && is_ignored_dirname(&name))
         })
-        .build();
+        .build()
+}
+
+/// Build the tree of markdown files for a folder root.
+/// Empty directories (no markdown descendants) are pruned.
+pub fn build_tree(root: &Path) -> AppResult<TreeNode> {
+    let walker = folder_walk(root);
 
     // Collect files first.
     let mut files: Vec<PathBuf> = Vec::new();
@@ -288,10 +310,9 @@ mod tests {
 
     #[test]
     fn find_git_repo_root_none_when_no_git() {
-        let dir = tempdir().unwrap();
-        fs::create_dir_all(dir.path().join("sub")).unwrap();
-        // tempdir is typically in /tmp which has no .git above it
-        let result = find_git_repo_root(&dir.path().join("sub"));
+        // The filesystem root is never below a repository root. This avoids
+        // assuming that the shared test runner's /tmp has no .git directory.
+        let result = find_git_repo_root(Path::new("/"));
         assert_eq!(result, None);
     }
 }

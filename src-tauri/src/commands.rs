@@ -4,7 +4,7 @@ use crate::folder::TreeNode;
 use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
 use crate::settings::{settings_dir, Folder};
-use crate::watcher::{watch_folder, SharedWatchers};
+use crate::watcher::{hydrate_folder, SharedWatchers};
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +26,7 @@ pub fn set_initial_target(target: InitialTarget, state: State<'_, InitialTargetS
 pub fn read_file(path: String, registry: State<'_, SharedRegistry>) -> AppResult<String> {
     let contents = crate::fs::read_text(&path)?;
     registry.push_recent(path);
-    let _ = registry.save(&settings_dir());
+    Arc::clone(&*registry).persist_async(settings_dir());
     Ok(contents)
 }
 
@@ -73,15 +73,15 @@ pub fn add_folder(
     registry: State<'_, SharedRegistry>,
     watchers: State<'_, SharedWatchers>,
 ) -> AppResult<Folder> {
-    let folder = registry.add_folder(PathBuf::from(&path))?;
+    let (folder, added) = registry.add_folder_with_status(PathBuf::from(&path))?;
     registry.save(&settings_dir())?;
-    if let Ok(handle) = watch_folder(
-        app.clone(),
-        Arc::clone(&registry),
-        folder.id.clone(),
-        PathBuf::from(&folder.path),
-    ) {
-        watchers.insert(folder.id.clone(), handle);
+    if added {
+        hydrate_folder(
+            app.clone(),
+            Arc::clone(&*registry),
+            Arc::clone(&*watchers),
+            folder.clone(),
+        );
     }
     let _ = app.emit("folder://changed", &folder.id);
     Ok(folder)
@@ -104,7 +104,7 @@ pub fn remove_folder(
 #[tauri::command]
 pub fn read_folder_tree(id: String, registry: State<'_, SharedRegistry>) -> AppResult<TreeNode> {
     registry
-        .tree(&id)
+        .tree_or_empty(&id)
         .ok_or_else(|| AppError::NotFound(format!("folder {id}")))
 }
 
