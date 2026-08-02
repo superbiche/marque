@@ -10,7 +10,9 @@ Item numbers are stable; gaps in the sequence are consumed or deported items. Fo
 
 ---
 
-## 1. Lockfile regeneration is blocked behind the safe gate — deps changes are committed nowhere
+## 1. ~~Lockfile regeneration is blocked behind the safe gate — deps changes are committed nowhere~~ (CLOSED 2026-08-02)
+
+**Closed:** operator ran `pnpm install` interactively through the safe gate the same day; vitest 3.2.7 / happy-dom 20.11.1 / mermaid 11.16.0 resolved, 37/37 tests + typecheck green on the regenerated tree, deps chunk committed (`4132a15`) and pushed.
 
 **Observation:** the dependency purge (hugeicons→lucide, katex/shadcn/radix-singles/tailwindcss-animate removal, mermaid 11.14.1, vitest 3, happy-dom 20) edited `package.json` and code, but every non-interactive `pnpm install` exits 102 (`safe: BLOCKED — audit found critical findings`, 4 CRITICAL / 32 HIGH pre-existing CVEs in the tree). `pnpm-lock.yaml` is stale; the deps chunk is intentionally uncommitted; vitest 3 / happy-dom 20 have never executed.
 
@@ -40,8 +42,6 @@ Item numbers are stable; gaps in the sequence are consumed or deported items. Fo
 
 **Consumes when:** operator (or a runtime-verify lane) launches the app post-install, confirms icons render, migration eprintln fires once, folders/theme survive.
 
-## 6. No local clippy signal; CI is the only lint gate
+## 6. ~~No local clippy signal; CI is the only lint gate~~ (CLOSED 2026-08-02)
 
-**Observation:** clippy isn't installed in the local toolchain (no rustup); `ci.yml` gates on `clippy -- -D warnings` but has never run (repo pushed 2026-08-02, deps CI leg red-by-design until item 1 consumes).
-
-**Consumes when:** first CI run is green on main.
+**Closed:** first green CI run on main (run 30748916873, 2026-08-02) after fixing the two lints local tooling couldn't see (`search.rs` sort_by_key, `watcher.rs` if-let). Standing caveat: clippy still isn't runnable locally — CI remains the lint oracle until rustup lands on this machine.
