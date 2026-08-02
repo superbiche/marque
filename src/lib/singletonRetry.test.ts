@@ -14,7 +14,7 @@ declare global {
 
 afterEach(() => {
   vi.resetModules();
-  vi.doUnmock("shiki");
+  vi.doUnmock("@shikijs/core");
   vi.doUnmock("mermaid");
   delete globalThis.__marqueMermaidRetryState;
 });
@@ -22,17 +22,17 @@ afterEach(() => {
 describe("lazy singleton retries", () => {
   it("retries Shiki after its initial load fails", async () => {
     const highlighter = {};
-    const createHighlighter = vi
+    const createHighlighterCore = vi
       .fn()
       .mockRejectedValueOnce(new Error("temporary failure"))
       .mockResolvedValueOnce(highlighter);
-    vi.doMock("shiki", () => ({ createHighlighter }));
+    vi.doMock("@shikijs/core", () => ({ createHighlighterCore }));
 
     const { getHighlighter } = await import("./highlight");
 
     await expect(getHighlighter()).rejects.toThrow("temporary failure");
     await expect(getHighlighter()).resolves.toBe(highlighter);
-    expect(createHighlighter).toHaveBeenCalledTimes(2);
+    expect(createHighlighterCore).toHaveBeenCalledTimes(2);
   });
 
   it("retries Mermaid after its initial module load fails", async () => {
