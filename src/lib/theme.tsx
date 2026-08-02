@@ -17,8 +17,12 @@ function systemPrefersDark(): boolean {
   return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
 }
 
+function resolveTheme(theme: Theme): "light" | "dark" {
+  return theme === "system" ? (systemPrefersDark() ? "dark" : "light") : theme;
+}
+
 function applyTheme(theme: Theme): "light" | "dark" {
-  const resolved = theme === "system" ? (systemPrefersDark() ? "dark" : "light") : theme;
+  const resolved = resolveTheme(theme);
   const root = document.documentElement;
   root.classList.toggle("dark", resolved === "dark");
   return resolved;
@@ -29,7 +33,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (typeof window === "undefined") return "system";
     return (localStorage.getItem(STORAGE_KEY) as Theme) || "system";
   });
-  const [resolved, setResolved] = React.useState<"light" | "dark">("light");
+  const [resolved, setResolved] = React.useState<"light" | "dark">(() => resolveTheme(theme));
 
   React.useEffect(() => {
     setResolved(applyTheme(theme));

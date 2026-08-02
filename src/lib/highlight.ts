@@ -6,27 +6,7 @@ import {
 } from "shiki";
 
 const COMMON_LANGS: BundledLanguage[] = [
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "json",
-  "rust",
-  "python",
-  "go",
   "bash",
-  "shell",
-  "yaml",
-  "toml",
-  "html",
-  "css",
-  "sql",
-  "md",
-  "diff",
-  "java",
-  "c",
-  "cpp",
-  "ruby",
 ];
 
 const THEMES: BundledTheme[] = ["github-light", "github-dark"];

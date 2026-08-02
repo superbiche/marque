@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderToString } from "react-dom/server";
 import { ThemeProvider, useTheme } from "./theme";
 
@@ -13,6 +13,10 @@ describe("ThemeProvider", () => {
     document.documentElement.classList.remove("dark");
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("provides a theme context (SSR string render smoke)", () => {
     const html = renderToString(
       <ThemeProvider>
@@ -20,6 +24,30 @@ describe("ThemeProvider", () => {
       </ThemeProvider>
     );
     expect(html).toContain("system:");
+  });
+
+  it("resolves a stored dark theme on the first render", () => {
+    localStorage.setItem("marque:theme", "dark");
+
+    const html = renderToString(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>
+    );
+
+    expect(html).toContain("dark:dark");
+  });
+
+  it("resolves the system preference on the first render", () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true }));
+
+    const html = renderToString(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>
+    );
+
+    expect(html).toContain("system:dark");
   });
 
   it("throws if useTheme used outside provider", () => {
