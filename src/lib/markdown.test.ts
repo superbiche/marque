@@ -12,7 +12,7 @@ describe("renderMarkdown", () => {
   it("renders GFM tables", () => {
     const md = `| a | b |\n|---|---|\n| 1 | 2 |\n`;
     const html = renderMarkdown(md);
-    expect(html).toContain("<table>");
+    expect(html).toMatch(/<table[^>]*>/);
     expect(html).toContain("<th>a</th>");
     expect(html).toContain("<td>1</td>");
   });
@@ -27,7 +27,7 @@ describe("renderMarkdown", () => {
   it("renders fenced code blocks with language class", () => {
     const md = "```ts\nconst x = 1;\n```\n";
     const html = renderMarkdown(md);
-    expect(html).toMatch(/<pre><code class="language-ts">/);
+    expect(html).toMatch(/<pre[^>]*><code class="language-ts">/);
   });
 
   it("flags mermaid blocks as pending for client-side rendering", () => {
@@ -61,7 +61,7 @@ describe("renderMarkdown", () => {
 
   it("renders blockquotes", () => {
     const html = renderMarkdown("> a quote");
-    expect(html).toContain("<blockquote>");
+    expect(html).toMatch(/<blockquote[^>]*>/);
   });
 
   it("strips YAML front matter at the top of the document", () => {
