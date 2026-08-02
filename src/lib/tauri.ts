@@ -42,6 +42,7 @@ export interface SettingsLoadStatus {
 
 export interface WatchLimit {
   folder_id: string;
+  folder_name: string;
   watched: number;
   limit: number;
 }

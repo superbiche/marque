@@ -22,6 +22,7 @@ pub const WATCH_LIMIT: usize = 10_000;
 #[derive(Clone, Serialize)]
 struct WatchLimitPayload<'a> {
     folder_id: &'a str,
+    folder_name: &'a str,
     watched: usize,
     limit: usize,
 }
@@ -34,6 +35,7 @@ struct WatcherInner {
     app: AppHandle,
     registry: SharedRegistry,
     folder_id: String,
+    folder_name: String,
     root: PathBuf,
     debouncer: parking_lot::Mutex<Debouncer<notify::RecommendedWatcher, RecommendedCache>>,
     watched: parking_lot::Mutex<WatchedDirectories>,
@@ -51,6 +53,7 @@ pub fn watch_folder(
     app: AppHandle,
     registry: SharedRegistry,
     folder_id: String,
+    folder_name: String,
     root: PathBuf,
 ) -> anyhow::Result<WatcherHandle> {
     let weak_slot = Arc::new(parking_lot::Mutex::new(Weak::<WatcherInner>::new()));
@@ -71,6 +74,7 @@ pub fn watch_folder(
         app,
         registry,
         folder_id,
+        folder_name,
         root: root.clone(),
         debouncer: parking_lot::Mutex::new(debouncer),
         watched: parking_lot::Mutex::new(WatchedDirectories::default()),
@@ -92,6 +96,15 @@ impl WatcherInner {
             .collect();
         if relevant_paths.is_empty() {
             return;
+        }
+
+        if relevant_paths.iter().any(|path| is_ignore_control_file(path)) {
+            if let Err(error) = self.reconcile_directories() {
+                eprintln!(
+                    "marque: failed to reconcile watcher for {}: {error}",
+                    self.root.display()
+                );
+            }
         }
 
         for path in &relevant_paths {
@@ -154,6 +167,40 @@ impl WatcherInner {
         Ok(())
     }
 
+    fn reconcile_directories(&self) -> notify::Result<()> {
+        let (directories, capped) = watch_directories(&self.root, WATCH_LIMIT);
+        let desired: HashSet<PathBuf> = directories.into_iter().collect();
+        let mut watched = self.watched.lock();
+        let (to_remove, to_add) = watch_set_diff(&watched.paths, &desired);
+
+        for directory in to_remove {
+            // Best-effort: a directory deleted since enumeration is already gone
+            // from the OS watch set, so unwatch may return WatchNotFound.
+            if let Err(error) = self.debouncer.lock().unwatch(&directory) {
+                eprintln!(
+                    "marque: failed to unwatch {}: {error}",
+                    directory.display()
+                );
+            }
+            watched.paths.remove(&directory);
+        }
+        for directory in to_add {
+            self.debouncer
+                .lock()
+                .watch(&directory, RecursiveMode::NonRecursive)?;
+            watched.paths.insert(directory);
+        }
+        if watched.paths.len() < WATCH_LIMIT {
+            watched.limit_emitted = false;
+        }
+        drop(watched);
+
+        if capped {
+            self.emit_limit_if_needed();
+        }
+        Ok(())
+    }
+
     fn emit_limit_if_needed(&self) {
         let watched = {
             let mut state = self.watched.lock();
@@ -165,6 +212,7 @@ impl WatcherInner {
         };
         let payload = WatchLimitPayload {
             folder_id: &self.folder_id,
+            folder_name: &self.folder_name,
             watched,
             limit: WATCH_LIMIT,
         };
@@ -203,6 +251,7 @@ fn hydrate_folder_sync(
         app.clone(),
         Arc::clone(registry),
         folder.id.clone(),
+        folder.name.clone(),
         PathBuf::from(&folder.path),
     ) {
         Ok(handle) => watchers.insert(folder.id.clone(), handle),
@@ -228,6 +277,17 @@ fn watch_directories(root: &Path, limit: usize) -> (Vec<PathBuf>, bool) {
         directories.push(entry.into_path());
     }
     (directories, false)
+}
+
+fn watch_set_diff(
+    current: &HashSet<PathBuf>,
+    desired: &HashSet<PathBuf>,
+) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut to_remove: Vec<PathBuf> = current.difference(desired).cloned().collect();
+    let mut to_add: Vec<PathBuf> = desired.difference(current).cloned().collect();
+    to_remove.sort();
+    to_add.sort();
+    (to_remove, to_add)
 }
 
 fn event_path_is_ignored(root: &Path, path: &Path) -> bool {
@@ -340,5 +400,27 @@ mod tests {
         assert!(event_path_is_ignored(dir.path(), &dir.path().join("generated/output.md")));
         assert!(!event_path_is_ignored(dir.path(), &dir.path().join("docs/readme.md")));
         assert!(!event_path_is_ignored(dir.path(), &dir.path().join(".gitignore")));
+    }
+
+    #[test]
+    fn watch_set_diff_reconciles_gitignore_changes() {
+        let dir = tempdir().unwrap();
+        fs::create_dir(dir.path().join(".git")).unwrap();
+        fs::write(dir.path().join(".gitignore"), "previously-ignored/\n").unwrap();
+        fs::create_dir(dir.path().join("previously-ignored")).unwrap();
+        fs::create_dir(dir.path().join("newly-ignored")).unwrap();
+
+        let (current, capped) = watch_directories(dir.path(), WATCH_LIMIT);
+        assert!(!capped);
+        fs::write(dir.path().join(".gitignore"), "newly-ignored/\n").unwrap();
+        let (desired, capped) = watch_directories(dir.path(), WATCH_LIMIT);
+        assert!(!capped);
+
+        let current: HashSet<PathBuf> = current.into_iter().collect();
+        let desired: HashSet<PathBuf> = desired.into_iter().collect();
+        let (to_remove, to_add) = watch_set_diff(&current, &desired);
+
+        assert_eq!(to_remove, vec![dir.path().join("newly-ignored")]);
+        assert_eq!(to_add, vec![dir.path().join("previously-ignored")]);
     }
 }

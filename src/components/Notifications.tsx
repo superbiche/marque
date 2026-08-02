@@ -39,8 +39,8 @@ export function Notifications() {
   }, [notify]);
 
   useEffect(() => {
-    const off = onFolderWatchLimit(({ folder_id, watched, limit }) => {
-      notify(`Folder ${folder_id} is too large to watch fully (${watched} of ${limit} directories). Changes may not auto-refresh.`);
+    const off = onFolderWatchLimit(({ folder_name, watched, limit }) => {
+      notify(`Folder ${folder_name} is too large to watch fully (${watched} of ${limit} directories). Changes may not auto-refresh.`);
     });
     return () => {
       off.then((unlisten) => unlisten());

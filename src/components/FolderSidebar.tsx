@@ -56,10 +56,15 @@ export function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }
   const collapsedRef = useRef(collapsed);
   const folderIdsRef = useRef(new Set<string>());
   const loadingTreeIdsRef = useRef(new Set<string>());
+  const pendingForceIdsRef = useRef(new Set<string>());
   const { sidebarGroupByRepo, setSidebarGroupByRepo } = usePreferences();
 
   const loadTree = useCallback(async (folderId: string, force = false) => {
-    if ((!force && treesRef.current[folderId]) || loadingTreeIdsRef.current.has(folderId)) {
+    if (loadingTreeIdsRef.current.has(folderId)) {
+      if (force) pendingForceIdsRef.current.add(folderId);
+      return;
+    }
+    if (!force && treesRef.current[folderId]) {
       return;
     }
 
@@ -73,6 +78,12 @@ export function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }
       // unreadable folder
     } finally {
       loadingTreeIdsRef.current.delete(folderId);
+      if (
+        pendingForceIdsRef.current.delete(folderId) &&
+        folderIdsRef.current.has(folderId)
+      ) {
+        void loadTree(folderId, true);
+      }
     }
   }, []);
 
