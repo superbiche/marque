@@ -28,24 +28,21 @@ pub fn watch_folder(
         Duration::from_millis(200),
         None,
         move |res: DebounceEventResult| {
-            match res {
-                Ok(events) => {
-                    reg_for_cb.refresh_folder(&id_for_cb);
-                    let _ = app_for_cb.emit("folder://changed", &id_for_cb);
+            if let Ok(events) = res {
+                reg_for_cb.refresh_folder(&id_for_cb);
+                let _ = app_for_cb.emit("folder://changed", &id_for_cb);
 
-                    let paths: Vec<String> = events
-                        .iter()
-                        .flat_map(|e| e.paths.iter())
-                        .filter(|p| p.is_file())
-                        .filter_map(|p| p.to_str().map(String::from))
-                        .collect::<HashSet<_>>()
-                        .into_iter()
-                        .collect();
-                    if !paths.is_empty() {
-                        let _ = app_for_cb.emit("file://changed", &paths);
-                    }
+                let paths: Vec<String> = events
+                    .iter()
+                    .flat_map(|e| e.paths.iter())
+                    .filter(|p| p.is_file())
+                    .filter_map(|p| p.to_str().map(String::from))
+                    .collect::<HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                if !paths.is_empty() {
+                    let _ = app_for_cb.emit("file://changed", &paths);
                 }
-                Err(_) => {}
             }
         },
     )?;

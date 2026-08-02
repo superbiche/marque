@@ -39,7 +39,7 @@ pub fn search(files: &[IndexedFile], query: &str, limit: usize) -> Vec<SearchRes
         })
         .collect();
 
-    scored.sort_by(|a, b| b.score.cmp(&a.score));
+    scored.sort_by_key(|r| std::cmp::Reverse(r.score));
     scored.truncate(limit);
     scored
 }
