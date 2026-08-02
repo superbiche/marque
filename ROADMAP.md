@@ -2,7 +2,7 @@
 
 **Discipline:** this is the wanted-later ledger; the current version's punch-list is `MISSING.md` (which defines the shared MISSING/ROADMAP rules this repo follows). Items graduate from here into `MISSING.md` when a version goal claims them; deported MISSING items land here as `gap:` lines with provenance.
 
-**Status 2026-08-02:** fork hygiene (§3 "De-forking" + Dependencies + CI baseline) executed the same day — see `MISSING.md` items 1/5/6 for its residuals. Phase 0–2 below remain the plan of record for v0.2.0.
+**Status 2026-08-02:** fork hygiene (§3 "De-forking" + Dependencies + CI baseline) executed the same day — see `MISSING.md` items 1/5/6 for its residuals. **Phase 0 executed 2026-08-02:** H1 locked with kernel evidence (846,385 inotify watches, ~3.5 min blocked setup, ramping ~6k/s; 1,242 watches / <2 s after removing the homelabs registration — backup at `~/.agents/backups/marque/settings.json.pre-phase0-2026-08-02`, re-add the folder once Phase 1 lands); Shiki eager set trimmed to `bash` and theme `resolved` sync-initialized (implemented by GPT-5.6-terra via acpx, brief + findings under `tmp/`). Phase 1–2 below remain the plan of record for v0.2.0.
 
 Synthesized from the 2026-08 multi-agent audit (adversarially verified). Priorities follow the fork's goals: startup performance > stability > maintainability.
 
