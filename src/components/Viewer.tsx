@@ -2,6 +2,7 @@ import * as React from "react";
 import { renderMarkdown, slugifyHeading } from "@/lib/markdown";
 import { highlightCode } from "@/lib/highlight";
 import { renderMermaidBlocks } from "@/lib/mermaid";
+import { createRenderCacheKey, renderCache } from "@/lib/renderCache";
 import { attachCopyButtons } from "@/components/CodeCopyOverlay";
 import { handleCopyAsMarkdown } from "@/lib/copyAsMarkdown";
 import { classifyLink } from "@/lib/links";
@@ -21,7 +22,13 @@ interface Props {
 
 const scrollMemory = new Map<string, number>();
 
-export function Viewer({
+interface RenderState {
+  key: string;
+  html: string;
+  isProcessed: boolean;
+}
+
+export const Viewer = React.memo(function Viewer({
   source,
   filePath,
   articleRef,
@@ -35,7 +42,13 @@ export function Viewer({
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const { resolved } = useTheme();
   const { copyAsMarkdown, contentWidth } = usePreferences();
-  const [html, setHtml] = React.useState("");
+  const cacheKey = createRenderCacheKey(filePath, source, resolved);
+  const [renderState, setRenderState] = React.useState<RenderState>({
+    key: "",
+    html: "",
+    isProcessed: false,
+  });
+  const html = renderState.html;
 
   // Keep onRendered fresh without making it a dep — otherwise every parent
   // re-render produces a new fn ref, retriggers the highlight effect, and the
@@ -46,15 +59,26 @@ export function Viewer({
   }, [onRendered]);
 
   React.useEffect(() => {
-    setHtml(renderMarkdown(source));
-  }, [source]);
+    const cachedHtml = renderCache.get(cacheKey);
+    setRenderState({
+      key: cacheKey,
+      html: cachedHtml ?? renderMarkdown(source),
+      isProcessed: cachedHtml !== undefined,
+    });
+  }, [cacheKey, source]);
 
   React.useEffect(() => {
     const root = ref.current;
-    if (!root) return;
+    if (!root || renderState.key !== cacheKey) return;
     let cancelled = false;
 
     (async () => {
+      if (renderState.isProcessed) {
+        attachCopyButtons(root as HTMLElement);
+        onRenderedRef.current?.();
+        return;
+      }
+
       const codeBlocks = root.querySelectorAll<HTMLElement>("pre > code[class*='language-']");
       for (const code of Array.from(codeBlocks)) {
         const cls = code.className;
@@ -80,9 +104,14 @@ export function Viewer({
         }
       }
       if (cancelled) return;
-      attachCopyButtons(root as HTMLElement);
       await renderMermaidBlocks(root as HTMLElement, resolved);
-      if (!cancelled) onRenderedRef.current?.();
+      if (cancelled) return;
+
+      // Copy buttons have listeners and cannot be serialized. Snapshot the
+      // completed Shiki/Mermaid markup first, then attach buttons to this DOM.
+      renderCache.set(cacheKey, root.innerHTML);
+      attachCopyButtons(root as HTMLElement);
+      onRenderedRef.current?.();
     })();
 
     return () => {
@@ -90,7 +119,7 @@ export function Viewer({
     };
     // intentionally omit `ref` and `onRendered`: ref is stable, onRendered is read via ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [html, resolved]);
+  }, [cacheKey, html, renderState.isProcessed, renderState.key, resolved]);
 
   React.useEffect(() => {
     const el = scrollerRef.current;
@@ -197,4 +226,4 @@ export function Viewer({
       />
     </div>
   );
-}
+});

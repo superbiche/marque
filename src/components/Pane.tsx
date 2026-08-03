@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import type { PaneState, TabState } from "@/lib/workspace";
 import { TabBar } from "@/components/TabBar";
 import { Viewer } from "@/components/Viewer";
@@ -9,9 +9,9 @@ interface Props {
   pane: PaneState;
   tabs: Record<string, TabState>;
   isFocused: boolean;
-  onSelectTab: (tabId: string) => void;
-  onCloseTab: (tabId: string) => void;
-  onFocusPane: () => void;
+  onSelectTab: (paneId: string, tabId: string) => void;
+  onCloseTab: (paneId: string, tabId: string) => void;
+  onFocusPane: (paneId: string) => void;
   searchOpen: boolean;
   onSearchClose: () => void;
   onOpenLink: (path: string, fragment?: string) => void;
@@ -19,7 +19,7 @@ interface Props {
   onFragmentHandled: () => void;
 }
 
-export function Pane({
+export const Pane = memo(function Pane({
   pane,
   tabs,
   isFocused,
@@ -35,10 +35,11 @@ export function Pane({
   const activeTab = pane.activeTabId ? tabs[pane.activeTabId] : undefined;
   const articleRef = useRef<HTMLElement>(null);
   const [contentNonce, setContentNonce] = useState(0);
+  const handleRendered = useCallback(() => setContentNonce((nonce) => nonce + 1), []);
 
   return (
     <div
-      onMouseDown={onFocusPane}
+      onMouseDown={() => onFocusPane(pane.id)}
       className={cn(
         "relative flex min-h-0 min-w-0 flex-1 flex-col",
         isFocused ? "ring-1 ring-ring/30" : ""
@@ -59,7 +60,7 @@ export function Pane({
             source={activeTab.source}
             filePath={activeTab.filePath}
             articleRef={articleRef}
-            onRendered={() => setContentNonce((n) => n + 1)}
+            onRendered={handleRendered}
             onOpenLink={onOpenLink}
             fragment={fragment}
             onFragmentHandled={onFragmentHandled}
@@ -78,4 +79,4 @@ export function Pane({
       </div>
     </div>
   );
-}
+});

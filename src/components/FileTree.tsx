@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { memo, useState } from "react";
 import { ChevronRight, FileText, Folder } from "lucide-react";
 import type { TreeNode } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -11,7 +11,7 @@ interface Props {
   isRoot?: boolean;
 }
 
-export function FileTreeNode({ node, depth = 0, activePath, onOpen, isRoot }: Props) {
+export const FileTreeNode = memo(function FileTreeNode({ node, depth = 0, activePath, onOpen, isRoot }: Props) {
   const [open, setOpen] = useState(depth < 1);
 
   if (isRoot) {
@@ -68,4 +68,4 @@ export function FileTreeNode({ node, depth = 0, activePath, onOpen, isRoot }: Pr
       </button>
     </li>
   );
-}
+});

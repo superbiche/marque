@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { memo } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -34,7 +35,7 @@ interface Props {
   onFind: () => void;
 }
 
-export function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind }: Props) {
+export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind }: Props) {
   const { theme, setTheme } = useTheme();
   const {
     copyAsMarkdown,
@@ -247,4 +248,4 @@ export function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, 
       </div>
     </header>
   );
-}
+});

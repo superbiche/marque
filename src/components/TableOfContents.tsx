@@ -1,8 +1,8 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { extractHeadings } from "@/lib/markdown";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-export function TableOfContents({ source }: { source: string }) {
+export const TableOfContents = memo(function TableOfContents({ source }: { source: string }) {
   const headings = useMemo(() => extractHeadings(source).filter((h) => h.level >= 1 && h.level <= 4), [source]);
 
   if (headings.length === 0) {
@@ -31,4 +31,4 @@ export function TableOfContents({ source }: { source: string }) {
       </nav>
     </ScrollArea>
   );
-}
+});

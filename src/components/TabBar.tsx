@@ -1,4 +1,5 @@
 import { X } from "lucide-react";
+import { memo } from "react";
 import { cn } from "@/lib/utils";
 import type { PaneState, TabState } from "@/lib/workspace";
 
@@ -6,9 +7,9 @@ interface Props {
   pane: PaneState;
   tabs: Record<string, TabState>;
   isFocused: boolean;
-  onSelect: (tabId: string) => void;
-  onClose: (tabId: string) => void;
-  onFocusPane: () => void;
+  onSelect: (paneId: string, tabId: string) => void;
+  onClose: (paneId: string, tabId: string) => void;
+  onFocusPane: (paneId: string) => void;
 }
 
 function tabLabel(tab: TabState | undefined): string {
@@ -21,10 +22,10 @@ function tabLabel(tab: TabState | undefined): string {
   return tab.title;
 }
 
-export function TabBar({ pane, tabs, isFocused, onSelect, onClose, onFocusPane }: Props) {
+export const TabBar = memo(function TabBar({ pane, tabs, isFocused, onSelect, onClose, onFocusPane }: Props) {
   return (
     <div
-      onMouseDown={onFocusPane}
+      onMouseDown={() => onFocusPane(pane.id)}
       className={cn(
         "flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b bg-card/40 px-1 pt-1",
         !isFocused && "opacity-70"
@@ -36,7 +37,7 @@ export function TabBar({ pane, tabs, isFocused, onSelect, onClose, onFocusPane }
         return (
           <div
             key={id}
-            onClick={() => onSelect(id)}
+            onClick={() => onSelect(pane.id, id)}
             className={cn(
               "group flex h-7 cursor-pointer items-center gap-1.5 rounded-t border border-b-0 px-2 text-xs",
               active
@@ -49,7 +50,7 @@ export function TabBar({ pane, tabs, isFocused, onSelect, onClose, onFocusPane }
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                onClose(id);
+                onClose(pane.id, id);
               }}
               className={cn(
                 "rounded p-0.5 hover:bg-muted",
@@ -64,4 +65,4 @@ export function TabBar({ pane, tabs, isFocused, onSelect, onClose, onFocusPane }
       })}
     </div>
   );
-}
+});

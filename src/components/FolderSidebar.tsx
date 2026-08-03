@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { tauri, onFolderChanged, type AnnotatedFolder, type TreeNode } from "@/lib/tauri";
 import { usePreferences } from "@/lib/preferences";
@@ -48,7 +48,7 @@ function groupByRepo(folders: AnnotatedFolder[]): RepoGroup[] {
   return groups;
 }
 
-export function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }: Props) {
+export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }: Props) {
   const [trees, setTrees] = useState<Record<string, TreeNode>>({});
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
@@ -276,4 +276,4 @@ export function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }
       </ScrollArea>
     </div>
   );
-}
+});

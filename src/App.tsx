@@ -46,6 +46,7 @@ function AppShell() {
   const [pendingFragment, setPendingFragment] = useState<{ path: string; fragment: string } | null>(null);
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
+  const tabsRef = useRef(state.tabs);
   const {
     contentZoomIn, contentZoomOut, contentZoomReset,
     sidebarLeftWidth, sidebarRightWidth,
@@ -55,6 +56,10 @@ function AppShell() {
   const activeTab = getActiveTab(state);
   const activePane = getActivePane(state);
   const isSplit = state.panes.length > 1;
+
+  useEffect(() => {
+    tabsRef.current = state.tabs;
+  }, [state.tabs]);
 
   const refreshFolders = useCallback(async () => {
     const list = await tauri.listFoldersGrouped();
@@ -102,7 +107,7 @@ function AppShell() {
   // Re-read open files when they change on disk.
   useEffect(() => {
     const off = onFileChanged(async (paths) => {
-      for (const tab of Object.values(state.tabs)) {
+      for (const tab of Object.values(tabsRef.current)) {
         if (tab.filePath && paths.includes(tab.filePath)) {
           try {
             const text = await tauri.readFile(tab.filePath);
@@ -116,7 +121,7 @@ function AppShell() {
     return () => {
       off.then((fn) => fn());
     };
-  }, [state.tabs]);
+  }, []);
 
   // CLI re-target via single-instance.
   useEffect(() => {
@@ -189,21 +194,36 @@ function AppShell() {
     return () => unlisten?.();
   }, [openFile]);
 
-  const handlePickFile = async () => {
+  const handlePickFile = useCallback(async () => {
     const picked = await openDialog({
       multiple: false,
       filters: [{ name: "Markdown", extensions: ["md", "markdown", "mdx"] }],
     });
     if (typeof picked === "string") openFile(picked);
-  };
+  }, [openFile]);
 
-  const handleSplit = (d: SplitDirection) => dispatch({ type: "SPLIT", direction: d });
-  const handleCloseSplit = () => dispatch({ type: "CLOSE_SPLIT" });
-  const handleJumpToFolder = (folderId: string) => {
+  const handleSplit = useCallback((direction: SplitDirection) => {
+    dispatch({ type: "SPLIT", direction });
+  }, []);
+  const handleCloseSplit = useCallback(() => dispatch({ type: "CLOSE_SPLIT" }), []);
+  const handleJumpToFolder = useCallback((folderId: string) => {
     sidebarRef.current
       ?.querySelector(`#folder-${cssEscape(folderId)}`)
       ?.scrollIntoView({ block: "start" });
-  };
+  }, []);
+  const handleSelectTab = useCallback((paneId: string, tabId: string) => {
+    dispatch({ type: "SWITCH_TAB", paneId, tabId });
+  }, []);
+  const handleCloseTab = useCallback((paneId: string, tabId: string) => {
+    dispatch({ type: "CLOSE_TAB", paneId, tabId });
+  }, []);
+  const handleFocusPane = useCallback((paneId: string) => {
+    dispatch({ type: "FOCUS_PANE", paneId });
+  }, []);
+  const handleSearchClose = useCallback(() => setSearchPaneId(null), []);
+  const handleFind = useCallback(() => setSearchPaneId(state.activePaneId), [state.activePaneId]);
+  const handleOpenPalette = useCallback(() => setPaletteOpen(true), []);
+  const handleFragmentHandled = useCallback(() => setPendingFragment(null), []);
 
   const renderPane = (paneId: string) => {
     const pane = state.panes.find((p) => p.id === paneId)!;
@@ -217,14 +237,14 @@ function AppShell() {
         pane={pane}
         tabs={state.tabs}
         isFocused={pane.id === state.activePaneId}
-        onSelectTab={(tabId) => dispatch({ type: "SWITCH_TAB", paneId: pane.id, tabId })}
-        onCloseTab={(tabId) => dispatch({ type: "CLOSE_TAB", tabId, paneId: pane.id })}
-        onFocusPane={() => dispatch({ type: "FOCUS_PANE", paneId: pane.id })}
+        onSelectTab={handleSelectTab}
+        onCloseTab={handleCloseTab}
+        onFocusPane={handleFocusPane}
         searchOpen={searchPaneId === pane.id}
-        onSearchClose={() => setSearchPaneId(null)}
+        onSearchClose={handleSearchClose}
         onOpenLink={openLink}
         fragment={fragment}
-        onFragmentHandled={() => setPendingFragment(null)}
+        onFragmentHandled={handleFragmentHandled}
       />
     );
   };
@@ -236,7 +256,7 @@ function AppShell() {
           folders={folders}
           activePath={activeTab?.filePath}
           onOpenFile={openFile}
-          onOpenPalette={() => setPaletteOpen(true)}
+          onOpenPalette={handleOpenPalette}
         />
       </div>
       <ResizeHandle
@@ -251,7 +271,7 @@ function AppShell() {
           onSplit={handleSplit}
           onCloseSplit={handleCloseSplit}
           isSplit={isSplit}
-          onFind={() => setSearchPaneId(state.activePaneId)}
+          onFind={handleFind}
         />
         <div className="flex min-h-0 flex-1">
           <main className="min-w-0 flex-1">

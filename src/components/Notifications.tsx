@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { onFolderWatchLimit, tauri } from "@/lib/tauri";
@@ -10,7 +10,7 @@ interface Notification {
 
 let nextNotificationId = 0;
 
-export function Notifications() {
+export const Notifications = memo(function Notifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
   const notify = useCallback((message: string) => {
@@ -66,4 +66,4 @@ export function Notifications() {
       ))}
     </div>
   );
-}
+});
