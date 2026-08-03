@@ -1,22 +1,35 @@
 import * as React from "react";
-import { renderMarkdown } from "@/lib/markdown";
+import { renderMarkdown, slugifyHeading } from "@/lib/markdown";
 import { highlightCode } from "@/lib/highlight";
 import { renderMermaidBlocks } from "@/lib/mermaid";
 import { attachCopyButtons } from "@/components/CodeCopyOverlay";
 import { handleCopyAsMarkdown } from "@/lib/copyAsMarkdown";
+import { classifyLink } from "@/lib/links";
 import { useTheme } from "@/lib/theme";
 import { usePreferences } from "@/lib/preferences";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 
 interface Props {
   source: string;
   filePath?: string;
   articleRef?: React.RefObject<HTMLElement | null>;
   onRendered?: () => void;
+  onOpenLink: (path: string, fragment?: string) => void;
+  fragment?: string;
+  onFragmentHandled?: () => void;
 }
 
 const scrollMemory = new Map<string, number>();
 
-export function Viewer({ source, filePath, articleRef, onRendered }: Props) {
+export function Viewer({
+  source,
+  filePath,
+  articleRef,
+  onRendered,
+  onOpenLink,
+  fragment,
+  onFragmentHandled,
+}: Props) {
   const internalRef = React.useRef<HTMLElement>(null);
   const ref = (articleRef ?? internalRef) as React.RefObject<HTMLElement | null>;
   const scrollerRef = React.useRef<HTMLDivElement>(null);
@@ -89,6 +102,31 @@ export function Viewer({ source, filePath, articleRef, onRendered }: Props) {
     return () => el.removeEventListener("scroll", onScroll);
   }, [filePath, html]);
 
+  const scrollToAnchor = React.useCallback((rawFragment: string): boolean => {
+    const root = ref.current;
+    const scroller = scrollerRef.current;
+    if (!root || !scroller) return false;
+
+    const id = slugifyHeading(rawFragment);
+    const target = Array.from(root.querySelectorAll<HTMLElement>("[id]")).find(
+      (element) => element.id === id,
+    );
+    if (!target) return false;
+
+    const top = target.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    scroller.scrollTo({ top, behavior: "auto" });
+    if (filePath) scrollMemory.set(filePath, top);
+    return true;
+  }, [filePath, ref]);
+
+  // A link can point to a document that is already rendered in another tab.
+  // Scroll after React has committed its HTML in either the new or existing tab.
+  React.useEffect(() => {
+    if (!fragment || !html) return;
+    scrollToAnchor(fragment);
+    onFragmentHandled?.();
+  }, [fragment, html, onFragmentHandled, scrollToAnchor]);
+
   // Intercept copy events to write original markdown source to clipboard.
   React.useEffect(() => {
     const root = ref.current;
@@ -101,6 +139,47 @@ export function Viewer({ source, filePath, articleRef, onRendered }: Props) {
     root.addEventListener("copy", onCopy);
     return () => root.removeEventListener("copy", onCopy);
   }, [source, copyAsMarkdown]);
+
+  // Own all markdown-link navigation here so filesystem links never navigate
+  // the webview away from the current document.
+  React.useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+
+    const onClick = (event: MouseEvent) => {
+      if (!(event.target instanceof Element)) return;
+      const anchor = event.target.closest("a");
+      if (!anchor || !root.contains(anchor)) return;
+
+      const href = anchor.getAttribute("href");
+      if (href === null) return;
+
+      const target = classifyLink(href, filePath);
+      switch (target.kind) {
+        case "anchor":
+          event.preventDefault();
+          scrollToAnchor(target.slug);
+          break;
+        case "external":
+          event.preventDefault();
+          void openUrl(target.url).catch((error) => console.error("failed to open URL", error));
+          break;
+        case "markdown":
+          event.preventDefault();
+          onOpenLink(target.path, target.fragment);
+          break;
+        case "path":
+          event.preventDefault();
+          void openPath(target.path).catch((error) => console.error("failed to open path", error));
+          break;
+        case "unresolved":
+          break;
+      }
+    };
+
+    root.addEventListener("click", onClick);
+    return () => root.removeEventListener("click", onClick);
+  }, [filePath, onOpenLink, ref, scrollToAnchor]);
 
   // Memoize the inner-html object so its reference is stable across renders.
   // If we passed a fresh { __html: html } object every render, React would

@@ -22,6 +22,27 @@ function parseMap(el: HTMLElement): [number, number] {
 }
 
 /**
+ * Whether a selection covers a rendered block's meaningful text. This keeps
+ * whitespace-only DOM differences (line wrapping, indentation) from turning
+ * a full-block copy into a native text copy.
+ */
+export function selectionCoversBlock(selectionText: string, blockText: string): boolean {
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+  return normalize(selectionText) === normalize(blockText);
+}
+
+function getSingleMappedBlock(selection: Selection, container: HTMLElement): HTMLElement | null {
+  const anchor = selection.anchorNode;
+  const focus = selection.focusNode;
+  if (!anchor || !focus) return null;
+  if (!container.contains(anchor) || !container.contains(focus)) return null;
+
+  const startEl = findMappedAncestor(anchor, container);
+  const endEl = findMappedAncestor(focus, container);
+  return startEl && startEl === endEl ? startEl : null;
+}
+
+/**
  * Given a DOM Selection within a source-mapped container, determine which
  * source lines are covered. Returns [startLine, endLine) or null.
  */
@@ -81,6 +102,14 @@ export function handleCopyAsMarkdown(
 ): boolean {
   const selection = document.getSelection();
   if (!selection || selection.isCollapsed) return false;
+
+  const singleBlock = getSingleMappedBlock(selection, container);
+  if (
+    singleBlock &&
+    !selectionCoversBlock(selection.toString(), singleBlock.textContent ?? "")
+  ) {
+    return false;
+  }
 
   const range = getSourceRange(selection, container);
   if (!range) return false;

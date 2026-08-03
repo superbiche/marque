@@ -14,6 +14,9 @@ interface Props {
   onFocusPane: () => void;
   searchOpen: boolean;
   onSearchClose: () => void;
+  onOpenLink: (path: string, fragment?: string) => void;
+  fragment?: string;
+  onFragmentHandled: () => void;
 }
 
 export function Pane({
@@ -25,6 +28,9 @@ export function Pane({
   onFocusPane,
   searchOpen,
   onSearchClose,
+  onOpenLink,
+  fragment,
+  onFragmentHandled,
 }: Props) {
   const activeTab = pane.activeTabId ? tabs[pane.activeTabId] : undefined;
   const articleRef = useRef<HTMLElement>(null);
@@ -54,6 +60,9 @@ export function Pane({
             filePath={activeTab.filePath}
             articleRef={articleRef}
             onRendered={() => setContentNonce((n) => n + 1)}
+            onOpenLink={onOpenLink}
+            fragment={fragment}
+            onFragmentHandled={onFragmentHandled}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">

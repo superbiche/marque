@@ -43,6 +43,7 @@ function AppShell() {
   const [state, dispatch] = useReducer(reduce, undefined, () => createInitialState(WELCOME));
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [searchPaneId, setSearchPaneId] = useState<string | null>(null);
+  const [pendingFragment, setPendingFragment] = useState<{ path: string; fragment: string } | null>(null);
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const {
@@ -61,15 +62,23 @@ function AppShell() {
     return list;
   }, []);
 
-  const openFile = useCallback(async (path: string) => {
+  const openFile = useCallback(async (path: string): Promise<boolean> => {
     try {
       const text = await tauri.readFile(path);
       const title = path.split("/").pop() ?? path;
       dispatch({ type: "OPEN_FILE", path, title, source: text });
+      return true;
     } catch (err) {
       console.error("failed to read file", err);
+      return false;
     }
   }, []);
+
+  const openLink = useCallback(async (path: string, fragment?: string) => {
+    setPendingFragment(fragment === undefined ? null : { path, fragment });
+    const opened = await openFile(path);
+    if (!opened) setPendingFragment(null);
+  }, [openFile]);
 
   // Initial load.
   useEffect(() => {
@@ -198,6 +207,10 @@ function AppShell() {
 
   const renderPane = (paneId: string) => {
     const pane = state.panes.find((p) => p.id === paneId)!;
+    const paneTab = pane.activeTabId ? state.tabs[pane.activeTabId] : undefined;
+    const fragment = pendingFragment && pendingFragment.path === paneTab?.filePath
+      ? pendingFragment.fragment
+      : undefined;
     return (
       <Pane
         key={pane.id}
@@ -209,6 +222,9 @@ function AppShell() {
         onFocusPane={() => dispatch({ type: "FOCUS_PANE", paneId: pane.id })}
         searchOpen={searchPaneId === pane.id}
         onSearchClose={() => setSearchPaneId(null)}
+        onOpenLink={openLink}
+        fragment={fragment}
+        onFragmentHandled={() => setPendingFragment(null)}
       />
     );
   };

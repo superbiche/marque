@@ -18,19 +18,22 @@ const md = new MarkdownIt({
   breaks: false,
 });
 
+export function slugifyHeading(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-");
+}
+
 md.use(anchor, {
   permalink: anchor.permalink.linkInsideHeader({
     symbol: "#",
     placement: "before",
     ariaHidden: true,
   }),
-  slugify: (s: string) =>
-    s
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9\s-]/g, "")
-      .replace(/\s+/g, "-")
-      .replace(/-+/g, "-"),
+  slugify: slugifyHeading,
 });
 md.use(footnote);
 md.use(taskLists, { enabled: true, label: false });
