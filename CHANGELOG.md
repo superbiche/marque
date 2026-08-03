@@ -8,6 +8,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [0.3.0] - 2026-08-03
+
+### Added
+- Marque logo — app icon set and README banner
+- Content zoom, separate from UI scaling: Ctrl/⌘ +/−/0, toolbar zoom buttons, and a "Content Text Size" control in Settings (70–200%)
+- Content width modes: Narrow (860px), Wide (1200px), Full
+- Working document links: relative and absolute links to other markdown files open in a tab (with `#heading` scroll), in-page anchors scroll, external URLs open the system browser, other file links open in the system handler
+- Release workflow: every `v*` tag builds and uploads Linux bundles (deb, rpm, AppImage)
+
+### Changed
+- Settings "Text Size" renamed to "UI Size" (it scales the whole UI, not just text)
+- Copying a partial selection inside a block now copies exactly the selected text; full-block and multi-block selections still copy the original markdown source
+- Render path memoized and processed documents cached per tab — settings interactions no longer re-render the sidebar tree, and revisiting a tab restores instantly instead of re-highlighting
+
+### Fixed
+- Editing a `.gitignore` now reconciles the watch set (newly ignored directories unwatched, newly visible ones watched)
+- Watch-limit warning shows the folder name instead of its id
+- A folder change arriving while that folder's tree is being fetched is no longer dropped
+
 ## [0.2.0] - 2026-08-03
 
 First marque release. Cold-launches in under 2 seconds with large folders registered and never stalls the UI on watcher rebuilds.
