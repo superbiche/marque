@@ -14,6 +14,7 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 - Collapse-all button on each sidebar folder header (visible on hover) — folds every subdirectory of that folder
 
 ### Changed
+- File/folder pickers now use the XDG desktop portal, so KDE (and other non-GNOME desktops) get their native dialog instead of the GTK one
 - Sidebar folders remember which subdirectories were expanded: folding a folder (or its workspace header) and reopening it restores the exact expansion state instead of auto-unfolding the first level. Directories now start collapsed.
 
 ## [0.3.0] - 2026-08-03
