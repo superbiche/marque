@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and release (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Resolve tag
+        id: meta
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # Intentionally no ref: read CHANGELOG from the triggering ref, so a
+      # retroactive workflow_dispatch from main picks up notes added post-tag.
+      - uses: actions/checkout@v4
+
+      - name: Extract changelog
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          BODY=$(awk "/^## \\[${VERSION}\\]/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md)
+          echo "$BODY" > release_notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "release $TAG already exists, skipping create"
+          elif [ -s release_notes.md ]; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Marque $TAG" --notes-file release_notes.md
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Marque $TAG" --generate-notes
+          fi
+
+  build-linux:
+    needs: [create-release]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri app
+        run: pnpm tauri build
+
+      - name: Upload bundles to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.create-release.outputs.tag }}"
+          VERSION="${{ needs.create-release.outputs.version }}"
+          for pattern in "deb/*.deb" "rpm/*.rpm" "appimage/*.AppImage"; do
+            for artifact in src-tauri/target/release/bundle/${pattern}; do
+              [ -e "$artifact" ] || continue
+              gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$artifact" --clobber
+            done
+          done
