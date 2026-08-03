@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo } from "react";
 import { ChevronRight, FileText, Folder } from "lucide-react";
 import type { TreeNode } from "@/lib/tauri";
 import { cn } from "@/lib/utils";
@@ -7,19 +7,37 @@ interface Props {
   node: TreeNode;
   depth?: number;
   activePath?: string;
+  expandedDirs: ReadonlySet<string>;
+  onToggleDir: (absolutePath: string) => void;
   onOpen: (absolutePath: string) => void;
   isRoot?: boolean;
 }
 
-export const FileTreeNode = memo(function FileTreeNode({ node, depth = 0, activePath, onOpen, isRoot }: Props) {
-  const [open, setOpen] = useState(depth < 1);
+export const FileTreeNode = memo(function FileTreeNode({
+  node,
+  depth = 0,
+  activePath,
+  expandedDirs,
+  onToggleDir,
+  onOpen,
+  isRoot,
+}: Props) {
+  const open = expandedDirs.has(node.path);
 
   if (isRoot) {
     // Render only the children of the root, no row for the root itself.
     return (
       <ul className="text-sm">
         {node.children.map((c) => (
-          <FileTreeNode key={c.path} node={c} depth={0} activePath={activePath} onOpen={onOpen} />
+          <FileTreeNode
+            key={c.path}
+            node={c}
+            depth={0}
+            activePath={activePath}
+            expandedDirs={expandedDirs}
+            onToggleDir={onToggleDir}
+            onOpen={onOpen}
+          />
         ))}
       </ul>
     );
@@ -30,7 +48,7 @@ export const FileTreeNode = memo(function FileTreeNode({ node, depth = 0, active
       <li>
         <button
           type="button"
-          onClick={() => setOpen((v) => !v)}
+          onClick={() => onToggleDir(node.path)}
           className="flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left hover:bg-accent"
           style={{ paddingLeft: `${0.4 + depth * 0.75}rem` }}
         >
@@ -43,7 +61,15 @@ export const FileTreeNode = memo(function FileTreeNode({ node, depth = 0, active
         {open && (
           <ul>
             {node.children.map((c) => (
-              <FileTreeNode key={c.path} node={c} depth={depth + 1} activePath={activePath} onOpen={onOpen} />
+              <FileTreeNode
+                key={c.path}
+                node={c}
+                depth={depth + 1}
+                activePath={activePath}
+                expandedDirs={expandedDirs}
+                onToggleDir={onToggleDir}
+                onOpen={onOpen}
+              />
             ))}
           </ul>
         )}

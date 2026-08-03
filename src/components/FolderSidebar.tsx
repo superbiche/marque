@@ -50,6 +50,7 @@ function groupByRepo(folders: AnnotatedFolder[]): RepoGroup[] {
 
 export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }: Props) {
   const [trees, setTrees] = useState<Record<string, TreeNode>>({});
+  const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const treesRef = useRef(trees);
@@ -128,6 +129,14 @@ export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, 
     };
   }, [loadTree]);
 
+  const handleToggleDir = useCallback((absolutePath: string) => {
+    setExpandedDirs((previous) => {
+      const next = new Set(previous);
+      if (!next.delete(absolutePath)) next.add(absolutePath);
+      return next;
+    });
+  }, []);
+
   const handleAdd = async () => {
     const picked = await openDialog({ directory: true, multiple: false });
     if (typeof picked === "string") {
@@ -175,7 +184,14 @@ export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, 
           </Tooltip>
         </div>
         {!isCollapsed && tree && (
-          <FileTreeNode node={tree} isRoot activePath={activePath} onOpen={onOpenFile} />
+          <FileTreeNode
+            node={tree}
+            isRoot
+            activePath={activePath}
+            expandedDirs={expandedDirs}
+            onToggleDir={handleToggleDir}
+            onOpen={onOpenFile}
+          />
         )}
       </div>
     );
