@@ -10,6 +10,9 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 
 ## [Unreleased]
 
+### Added
+- Collapse-all button on each sidebar folder header (visible on hover) — folds every subdirectory of that folder
+
 ### Changed
 - Sidebar folders remember which subdirectories were expanded: folding a folder (or its workspace header) and reopening it restores the exact expansion state instead of auto-unfolding the first level. Directories now start collapsed.
 

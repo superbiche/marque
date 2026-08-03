@@ -9,7 +9,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Plus, X, ChevronDown, ChevronRight, FolderTree, Search, Layers, List } from "lucide-react";
+import { Plus, X, ChevronDown, ChevronRight, ChevronsDownUp, FolderTree, Search, Layers, List } from "lucide-react";
 import { FileTreeNode } from "@/components/FileTree";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -137,6 +137,17 @@ export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, 
     });
   }, []);
 
+  const handleCollapseAll = useCallback((rootPath: string) => {
+    const prefix = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
+    setExpandedDirs((previous) => {
+      const next = new Set<string>();
+      for (const path of previous) {
+        if (path !== rootPath && !path.startsWith(prefix)) next.add(path);
+      }
+      return next.size === previous.size ? previous : next;
+    });
+  }, []);
+
   const handleAdd = async () => {
     const picked = await openDialog({ directory: true, multiple: false });
     if (typeof picked === "string") {
@@ -166,6 +177,22 @@ export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, 
             )}
             <span className="truncate text-xs font-semibold">{f.name}</span>
           </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={() => handleCollapseAll(f.path)}
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "h-5 w-5 opacity-0 transition-opacity",
+                  "group-hover/folder:opacity-100"
+                )}
+              >
+                <ChevronsDownUp className="h-3 w-3" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">Collapse all</TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
