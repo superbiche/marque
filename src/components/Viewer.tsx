@@ -21,7 +21,7 @@ export function Viewer({ source, filePath, articleRef, onRendered }: Props) {
   const ref = (articleRef ?? internalRef) as React.RefObject<HTMLElement | null>;
   const scrollerRef = React.useRef<HTMLDivElement>(null);
   const { resolved } = useTheme();
-  const { copyAsMarkdown } = usePreferences();
+  const { copyAsMarkdown, contentWidth } = usePreferences();
   const [html, setHtml] = React.useState("");
 
   // Keep onRendered fresh without making it a dep — otherwise every parent
@@ -111,7 +111,11 @@ export function Viewer({ source, filePath, articleRef, onRendered }: Props) {
 
   return (
     <div ref={scrollerRef} className="h-full w-full overflow-auto">
-      <article ref={ref} className="markdown-body" dangerouslySetInnerHTML={dangerousHtml} />
+      <article
+        ref={ref}
+        className={`markdown-body markdown-width-${contentWidth}`}
+        dangerouslySetInnerHTML={dangerousHtml}
+      />
     </div>
   );
 }

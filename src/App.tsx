@@ -46,7 +46,7 @@ function AppShell() {
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const {
-    zoomIn, zoomOut, zoomReset,
+    contentZoomIn, contentZoomOut, contentZoomReset,
     sidebarLeftWidth, sidebarRightWidth,
     setSidebarWidth, resetSidebarWidth,
   } = usePreferences();
@@ -153,18 +153,18 @@ function AppShell() {
         if (tabId) dispatch({ type: "CLOSE_TAB", tabId, paneId: activePane.id });
       } else if (meta && (e.key === "=" || e.key === "+")) {
         e.preventDefault();
-        zoomIn();
+        contentZoomIn();
       } else if (meta && e.key === "-") {
         e.preventDefault();
-        zoomOut();
+        contentZoomOut();
       } else if (meta && k === "0") {
         e.preventDefault();
-        zoomReset();
+        contentZoomReset();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.activePaneId, activePane.activeTabId, activePane.id, zoomIn, zoomOut, zoomReset]);
+  }, [state.activePaneId, activePane.activeTabId, activePane.id, contentZoomIn, contentZoomOut, contentZoomReset]);
 
   // File drop opens as new tab.
   useEffect(() => {

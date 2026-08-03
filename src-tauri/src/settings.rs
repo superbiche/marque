@@ -27,6 +27,10 @@ pub struct Settings {
     #[serde(default)]
     pub zoom: Option<f64>,
     #[serde(default)]
+    pub content_zoom: Option<f64>,
+    #[serde(default)]
+    pub content_width: Option<String>,
+    #[serde(default)]
     pub sidebar_left_width: Option<u32>,
     #[serde(default)]
     pub sidebar_right_width: Option<u32>,
@@ -339,5 +343,21 @@ mod tests {
         let s = Settings::load_with_status(dir.path()).unwrap().settings;
         assert_eq!(s.folders.len(), 1);
         assert_eq!(s.folders[0].id, "v1");
+    }
+
+    #[test]
+    fn loads_settings_without_content_preferences() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"{"zoom":1.1,"sidebar_left_width":240}"#,
+        )
+        .unwrap();
+
+        let settings = Settings::load_with_status(dir.path()).unwrap().settings;
+
+        assert_eq!(settings.zoom, Some(1.1));
+        assert_eq!(settings.content_zoom, None);
+        assert_eq!(settings.content_width, None);
     }
 }

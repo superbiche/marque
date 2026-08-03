@@ -68,6 +68,8 @@ export const tauri = {
 
 export interface PreferencesPayload {
   zoom: number | null;
+  content_zoom: number | null;
+  content_width: string | null;
   sidebar_left_width: number | null;
   sidebar_right_width: number | null;
   copy_as_markdown: boolean | null;

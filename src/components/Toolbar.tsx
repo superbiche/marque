@@ -13,9 +13,16 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
-import { Search, Sun, Moon, Monitor, FileText, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus } from "lucide-react";
+import { Search, Sun, Moon, Monitor, FileText, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { useTheme, type Theme } from "@/lib/theme";
-import { usePreferences } from "@/lib/preferences";
+import {
+  CONTENT_ZOOM_MAX,
+  CONTENT_ZOOM_MIN,
+  UI_ZOOM_MAX,
+  UI_ZOOM_MIN,
+  usePreferences,
+  type ContentWidth,
+} from "@/lib/preferences";
 import type { SplitDirection } from "@/lib/workspace";
 
 interface Props {
@@ -29,7 +36,20 @@ interface Props {
 
 export function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind }: Props) {
   const { theme, setTheme } = useTheme();
-  const { copyAsMarkdown, setCopyAsMarkdown, zoom, zoomIn, zoomOut, zoomReset } = usePreferences();
+  const {
+    copyAsMarkdown,
+    setCopyAsMarkdown,
+    zoom,
+    zoomIn,
+    zoomOut,
+    zoomReset,
+    contentZoom,
+    contentZoomIn,
+    contentZoomOut,
+    contentZoomReset,
+    contentWidth,
+    setContentWidth,
+  } = usePreferences();
   const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
 
   return (
@@ -81,6 +101,36 @@ export function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, 
             </Tooltip>
           </>
         )}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              onClick={contentZoomOut}
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              disabled={contentZoom <= CONTENT_ZOOM_MIN}
+              aria-label="Content zoom out"
+            >
+              <ZoomOut className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Content zoom out (⌘−)</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              onClick={contentZoomIn}
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              disabled={contentZoom >= CONTENT_ZOOM_MAX}
+              aria-label="Content zoom in"
+            >
+              <ZoomIn className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Content zoom in (⌘+)</TooltipContent>
+        </Tooltip>
         <DropdownMenu>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -102,14 +152,14 @@ export function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, 
               Copy as Markdown
             </DropdownMenuCheckboxItem>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Text Size</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">UI Size</DropdownMenuLabel>
             <div className="flex items-center gap-1 px-2 pb-1.5">
               <Button
                 variant="outline"
                 size="icon"
                 className="h-6 w-6"
                 onClick={zoomOut}
-                disabled={zoom <= 0.7}
+                disabled={zoom <= UI_ZOOM_MIN}
               >
                 <Minus className="h-3 w-3" />
               </Button>
@@ -125,11 +175,50 @@ export function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, 
                 size="icon"
                 className="h-6 w-6"
                 onClick={zoomIn}
-                disabled={zoom >= 1.6}
+                disabled={zoom >= UI_ZOOM_MAX}
               >
                 <Plus className="h-3 w-3" />
               </Button>
             </div>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Content Text Size</DropdownMenuLabel>
+            <div className="flex items-center gap-1 px-2 pb-1.5">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-6 w-6"
+                onClick={contentZoomOut}
+                disabled={contentZoom <= CONTENT_ZOOM_MIN}
+              >
+                <Minus className="h-3 w-3" />
+              </Button>
+              <button
+                onClick={contentZoomReset}
+                className="min-w-[3rem] rounded px-1 text-center text-xs text-foreground hover:bg-accent"
+                title="Reset to 100%"
+              >
+                {Math.round(contentZoom * 100)}%
+              </button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-6 w-6"
+                onClick={contentZoomIn}
+                disabled={contentZoom >= CONTENT_ZOOM_MAX}
+              >
+                <Plus className="h-3 w-3" />
+              </Button>
+            </div>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Content Width</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={contentWidth}
+              onValueChange={(width) => setContentWidth(width as ContentWidth)}
+            >
+              <DropdownMenuRadioItem value="narrow">Narrow</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="wide">Wide</DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="full">Full</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>

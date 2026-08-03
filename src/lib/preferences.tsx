@@ -4,24 +4,33 @@ import { tauri } from "@/lib/tauri";
 export interface Preferences {
   copyAsMarkdown: boolean;
   zoom: number;
+  contentZoom: number;
+  contentWidth: ContentWidth;
   sidebarLeftWidth: number;
   sidebarRightWidth: number;
   sidebarGroupByRepo: boolean;
 }
+
+export type ContentWidth = "narrow" | "wide" | "full";
 
 const STORAGE_KEY = "marque:preferences";
 
 const DEFAULTS: Preferences = {
   copyAsMarkdown: true,
   zoom: 1.0,
+  contentZoom: 1.0,
+  contentWidth: "narrow",
   sidebarLeftWidth: 256,
   sidebarRightWidth: 224,
   sidebarGroupByRepo: true,
 };
 
-const ZOOM_MIN = 0.7;
-const ZOOM_MAX = 1.6;
-const ZOOM_STEP = 0.1;
+export const UI_ZOOM_MIN = 0.7;
+export const UI_ZOOM_MAX = 1.6;
+export const UI_ZOOM_STEP = 0.1;
+export const CONTENT_ZOOM_MIN = 0.7;
+export const CONTENT_ZOOM_MAX = 2.0;
+export const CONTENT_ZOOM_STEP = 0.1;
 
 export const SIDEBAR_LEFT_MIN = 180;
 export const SIDEBAR_LEFT_MAX = 400;
@@ -36,6 +45,10 @@ interface Ctx extends Preferences {
   zoomIn: () => void;
   zoomOut: () => void;
   zoomReset: () => void;
+  contentZoomIn: () => void;
+  contentZoomOut: () => void;
+  contentZoomReset: () => void;
+  setContentWidth: (width: ContentWidth) => void;
   setSidebarWidth: (side: "left" | "right", width: number) => void;
   resetSidebarWidth: (side: "left" | "right") => void;
 }
@@ -47,7 +60,17 @@ function load(): Preferences {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULTS;
-    return { ...DEFAULTS, ...JSON.parse(raw) };
+    const stored = JSON.parse(raw) as Partial<Preferences>;
+    return {
+      ...DEFAULTS,
+      ...stored,
+      contentZoom: typeof stored.contentZoom === "number"
+        ? clampContentZoom(stored.contentZoom)
+        : DEFAULTS.contentZoom,
+      contentWidth: isContentWidth(stored.contentWidth)
+        ? stored.contentWidth
+        : DEFAULTS.contentWidth,
+    };
   } catch {
     return DEFAULTS;
   }
@@ -63,6 +86,8 @@ function persistToBackend(prefs: Preferences) {
   backendTimer = setTimeout(() => {
     tauri.savePreferences({
       zoom: prefs.zoom,
+      content_zoom: prefs.contentZoom,
+      content_width: prefs.contentWidth,
       sidebar_left_width: prefs.sidebarLeftWidth,
       sidebar_right_width: prefs.sidebarRightWidth,
       copy_as_markdown: prefs.copyAsMarkdown,
@@ -72,7 +97,15 @@ function persistToBackend(prefs: Preferences) {
 }
 
 function clampZoom(z: number): number {
-  return Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 10) / 10;
+  return Math.round(Math.min(UI_ZOOM_MAX, Math.max(UI_ZOOM_MIN, z)) * 10) / 10;
+}
+
+export function clampContentZoom(zoom: number): number {
+  return Math.round(Math.min(CONTENT_ZOOM_MAX, Math.max(CONTENT_ZOOM_MIN, zoom)) * 10) / 10;
+}
+
+function isContentWidth(width: unknown): width is ContentWidth {
+  return width === "narrow" || width === "wide" || width === "full";
 }
 
 export function PreferencesProvider({ children }: { children: React.ReactNode }) {
@@ -84,6 +117,8 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       setPrefs((prev) => {
         const next = { ...prev };
         if (backend.zoom != null) next.zoom = backend.zoom;
+        if (backend.content_zoom != null) next.contentZoom = clampContentZoom(backend.content_zoom);
+        if (isContentWidth(backend.content_width)) next.contentWidth = backend.content_width;
         if (backend.sidebar_left_width != null) next.sidebarLeftWidth = backend.sidebar_left_width;
         if (backend.sidebar_right_width != null) next.sidebarRightWidth = backend.sidebar_right_width;
         if (backend.copy_as_markdown != null) next.copyAsMarkdown = backend.copy_as_markdown;
@@ -99,6 +134,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     document.documentElement.style.fontSize = `${16 * prefs.zoom}px`;
     return () => { document.documentElement.style.fontSize = ""; };
   }, [prefs.zoom]);
+
+  React.useEffect(() => {
+    document.documentElement.style.setProperty("--content-zoom", String(prefs.contentZoom));
+    return () => { document.documentElement.style.removeProperty("--content-zoom"); };
+  }, [prefs.contentZoom]);
 
   const update = React.useCallback((fn: (prev: Preferences) => Preferences) => {
     setPrefs((prev) => {
@@ -120,17 +160,37 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
   );
 
   const zoomIn = React.useCallback(
-    () => update((p) => ({ ...p, zoom: clampZoom(p.zoom + ZOOM_STEP) })),
+    () => update((p) => ({ ...p, zoom: clampZoom(p.zoom + UI_ZOOM_STEP) })),
     [update],
   );
 
   const zoomOut = React.useCallback(
-    () => update((p) => ({ ...p, zoom: clampZoom(p.zoom - ZOOM_STEP) })),
+    () => update((p) => ({ ...p, zoom: clampZoom(p.zoom - UI_ZOOM_STEP) })),
     [update],
   );
 
   const zoomReset = React.useCallback(
     () => update((p) => ({ ...p, zoom: 1.0 })),
+    [update],
+  );
+
+  const contentZoomIn = React.useCallback(
+    () => update((p) => ({ ...p, contentZoom: clampContentZoom(p.contentZoom + CONTENT_ZOOM_STEP) })),
+    [update],
+  );
+
+  const contentZoomOut = React.useCallback(
+    () => update((p) => ({ ...p, contentZoom: clampContentZoom(p.contentZoom - CONTENT_ZOOM_STEP) })),
+    [update],
+  );
+
+  const contentZoomReset = React.useCallback(
+    () => update((p) => ({ ...p, contentZoom: 1.0 })),
+    [update],
+  );
+
+  const setContentWidth = React.useCallback(
+    (width: ContentWidth) => update((p) => ({ ...p, contentWidth: width })),
     [update],
   );
 
@@ -162,10 +222,14 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       zoomIn,
       zoomOut,
       zoomReset,
+      contentZoomIn,
+      contentZoomOut,
+      contentZoomReset,
+      setContentWidth,
       setSidebarWidth,
       resetSidebarWidth,
     }),
-    [prefs, setCopyAsMarkdown, setSidebarGroupByRepo, zoomIn, zoomOut, zoomReset, setSidebarWidth, resetSidebarWidth],
+    [prefs, setCopyAsMarkdown, setSidebarGroupByRepo, zoomIn, zoomOut, zoomReset, contentZoomIn, contentZoomOut, contentZoomReset, setContentWidth, setSidebarWidth, resetSidebarWidth],
   );
 
   return (
