@@ -11,6 +11,7 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 ## [Unreleased]
 
 ### Added
+- Drag files out of Marque: sidebar file rows and tabs can be dragged into any drop target (a browser upload zone, a file manager, a chat app)
 - Collapse-all button on each sidebar folder header (visible on hover) — folds every subdirectory of that folder
 
 ### Changed

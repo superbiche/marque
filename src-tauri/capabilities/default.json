@@ -8,6 +8,7 @@
     "opener:default",
     "opener:allow-open-path",
     "dialog:default",
+    "drag:default",
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten"

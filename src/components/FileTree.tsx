@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { ChevronRight, FileText, Folder } from "lucide-react";
 import type { TreeNode } from "@/lib/tauri";
+import { startFileDrag } from "@/lib/dragOut";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -83,6 +84,11 @@ export const FileTreeNode = memo(function FileTreeNode({
       <button
         type="button"
         onClick={() => onOpen(node.path)}
+        draggable
+        onDragStart={(event) => {
+          event.preventDefault();
+          startFileDrag(node.path);
+        }}
         className={cn(
           "flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left hover:bg-accent",
           isActive && "bg-accent text-accent-foreground"

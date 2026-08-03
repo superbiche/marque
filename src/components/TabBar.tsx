@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { memo } from "react";
+import { startFileDrag } from "@/lib/dragOut";
 import { cn } from "@/lib/utils";
 import type { PaneState, TabState } from "@/lib/workspace";
 
@@ -38,6 +39,12 @@ export const TabBar = memo(function TabBar({ pane, tabs, isFocused, onSelect, on
           <div
             key={id}
             onClick={() => onSelect(pane.id, id)}
+            draggable={Boolean(tab?.filePath)}
+            onDragStart={(event) => {
+              if (!tab?.filePath) return;
+              event.preventDefault();
+              startFileDrag(tab.filePath);
+            }}
             className={cn(
               "group flex h-7 cursor-pointer items-center gap-1.5 rounded-t border border-b-0 px-2 text-xs",
               active
