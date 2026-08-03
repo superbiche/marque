@@ -1,5 +1,7 @@
 <h1 align="center">
   <br>
+  <img src="assets/logo.png" alt="Marque" width="360">
+  <br>
    Marque
   <br>
 </h1>
