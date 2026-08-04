@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.0] - 2026-08-04
 
 ### Added
 - Drag files out of Marque: sidebar file rows and tabs can be dragged into any drop target (a browser upload zone, a file manager, a chat app)
