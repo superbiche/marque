@@ -28,7 +28,7 @@ Live project state is NOT in this file: `ROADMAP.md` carries the wanted-later le
 
 If a request would require swapping one of these, stop and confirm.
 
-Platform reality: developed and used on Fedora Linux / Wayland, built against system `webkit2gtk4.1`. The upstream AppImage pipeline was deleted for this reason — do not resurrect it.
+Platform reality: developed and used on Fedora Linux / Wayland, built against system `webkit2gtk4.1`. Releases are built by `.github/workflows/release.yml` (deb, rpm, AppImage) on `v*` tags — the upstream marky release machinery stays gone.
 
 ## Project layout
 
@@ -82,6 +82,12 @@ pnpm tauri build         # production bundle
 ./scripts/install-cli.sh # install marque CLI wrapper (Linux)
 ```
 
+## Releases & versioning
+
+- Pre-1.0 semver intent: non-breaking feature slices and fixes bump PATCH (`0.4.z`). Bump MINOR only for breaking changes (settings/file format, CLI behavior, capability regressions) or structural rewrites. Ambiguous cases: ask, don't guess.
+- Release recipe: bump the version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` (then `cargo check` to refresh the lockfile); retitle the CHANGELOG `[Unreleased]` section to the version + date; commit as `vX.Y.Z`; wait for CI green; push a GPG-signed `vX.Y.Z` tag. The tag triggers `.github/workflows/release.yml` (deb, rpm, AppImage). A release is done only when all three assets exist on the GitHub release.
+- `CHANGELOG.md`: land each slice under `[Unreleased]`; the release workflow extracts the version section for release notes.
+
 ## Testing
 
 - Rust: `cargo test` inside `src-tauri/`.
@@ -97,7 +103,7 @@ pnpm tauri build         # production bundle
 - Don't persist user data outside `~/.config/marque` (settings) — folders are pointers; marque never writes inside them.
 - Don't fetch remote resources at runtime (except images referenced in the markdown itself). No telemetry, no auto-update pings without explicit opt-in.
 - Don't over-abstract. This is a single-purpose app — keep the component tree flat.
-- Don't re-add upstream-sync machinery (remotes, sync scripts, release AppImage workflow) — the fork is hard.
+- Don't re-add upstream-sync machinery (remotes, sync scripts, upstream release workflows) — the fork is hard.
 
 ## When adding a new markdown feature
 
