@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Added
+- Content font setting: Geist (default), Inter, iA Writer Quattro, Literata, or System — applies to rendered markdown only
+
+### Changed
+- Softened dark theme: warm dark-gray surfaces instead of near-black, foreground dimmed below pure white for less glare
+
 ## [0.4.0] - 2026-08-04
 
 ### Added

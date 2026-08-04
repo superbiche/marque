@@ -6,12 +6,31 @@ export interface Preferences {
   zoom: number;
   contentZoom: number;
   contentWidth: ContentWidth;
+  contentFont: ContentFont;
   sidebarLeftWidth: number;
   sidebarRightWidth: number;
   sidebarGroupByRepo: boolean;
 }
 
 export type ContentWidth = "narrow" | "wide" | "full";
+
+export type ContentFont = "geist" | "inter" | "quattro" | "literata" | "system";
+
+export const CONTENT_FONT_LABELS: Record<ContentFont, string> = {
+  geist: "Geist",
+  inter: "Inter",
+  quattro: "iA Writer Quattro",
+  literata: "Literata",
+  system: "System",
+};
+
+const CONTENT_FONT_STACKS: Record<ContentFont, string> = {
+  geist: '"Geist Variable", ui-sans-serif, system-ui, sans-serif',
+  inter: '"Inter Variable", ui-sans-serif, system-ui, sans-serif',
+  quattro: '"iA Writer Quattro", ui-sans-serif, system-ui, sans-serif',
+  literata: '"Literata Variable", Georgia, serif',
+  system: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+};
 
 const STORAGE_KEY = "marque:preferences";
 
@@ -20,6 +39,7 @@ const DEFAULTS: Preferences = {
   zoom: 1.0,
   contentZoom: 1.0,
   contentWidth: "narrow",
+  contentFont: "geist",
   sidebarLeftWidth: 256,
   sidebarRightWidth: 224,
   sidebarGroupByRepo: true,
@@ -49,6 +69,7 @@ interface Ctx extends Preferences {
   contentZoomOut: () => void;
   contentZoomReset: () => void;
   setContentWidth: (width: ContentWidth) => void;
+  setContentFont: (font: ContentFont) => void;
   setSidebarWidth: (side: "left" | "right", width: number) => void;
   resetSidebarWidth: (side: "left" | "right") => void;
 }
@@ -70,6 +91,9 @@ function load(): Preferences {
       contentWidth: isContentWidth(stored.contentWidth)
         ? stored.contentWidth
         : DEFAULTS.contentWidth,
+      contentFont: isContentFont(stored.contentFont)
+        ? stored.contentFont
+        : DEFAULTS.contentFont,
     };
   } catch {
     return DEFAULTS;
@@ -88,6 +112,7 @@ function persistToBackend(prefs: Preferences) {
       zoom: prefs.zoom,
       content_zoom: prefs.contentZoom,
       content_width: prefs.contentWidth,
+      content_font: prefs.contentFont,
       sidebar_left_width: prefs.sidebarLeftWidth,
       sidebar_right_width: prefs.sidebarRightWidth,
       copy_as_markdown: prefs.copyAsMarkdown,
@@ -108,6 +133,10 @@ function isContentWidth(width: unknown): width is ContentWidth {
   return width === "narrow" || width === "wide" || width === "full";
 }
 
+function isContentFont(font: unknown): font is ContentFont {
+  return typeof font === "string" && font in CONTENT_FONT_STACKS;
+}
+
 export function PreferencesProvider({ children }: { children: React.ReactNode }) {
   const [prefs, setPrefs] = React.useState<Preferences>(load);
 
@@ -119,6 +148,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         if (backend.zoom != null) next.zoom = backend.zoom;
         if (backend.content_zoom != null) next.contentZoom = clampContentZoom(backend.content_zoom);
         if (isContentWidth(backend.content_width)) next.contentWidth = backend.content_width;
+        if (isContentFont(backend.content_font)) next.contentFont = backend.content_font;
         if (backend.sidebar_left_width != null) next.sidebarLeftWidth = backend.sidebar_left_width;
         if (backend.sidebar_right_width != null) next.sidebarRightWidth = backend.sidebar_right_width;
         if (backend.copy_as_markdown != null) next.copyAsMarkdown = backend.copy_as_markdown;
@@ -139,6 +169,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     document.documentElement.style.setProperty("--content-zoom", String(prefs.contentZoom));
     return () => { document.documentElement.style.removeProperty("--content-zoom"); };
   }, [prefs.contentZoom]);
+
+  React.useEffect(() => {
+    document.documentElement.style.setProperty("--content-font", CONTENT_FONT_STACKS[prefs.contentFont]);
+    return () => { document.documentElement.style.removeProperty("--content-font"); };
+  }, [prefs.contentFont]);
 
   const update = React.useCallback((fn: (prev: Preferences) => Preferences) => {
     setPrefs((prev) => {
@@ -194,6 +229,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
     [update],
   );
 
+  const setContentFont = React.useCallback(
+    (font: ContentFont) => update((p) => ({ ...p, contentFont: font })),
+    [update],
+  );
+
   const setSidebarWidth = React.useCallback(
     (side: "left" | "right", width: number) => {
       const min = side === "left" ? SIDEBAR_LEFT_MIN : SIDEBAR_RIGHT_MIN;
@@ -226,10 +266,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       contentZoomOut,
       contentZoomReset,
       setContentWidth,
+      setContentFont,
       setSidebarWidth,
       resetSidebarWidth,
     }),
-    [prefs, setCopyAsMarkdown, setSidebarGroupByRepo, zoomIn, zoomOut, zoomReset, contentZoomIn, contentZoomOut, contentZoomReset, setContentWidth, setSidebarWidth, resetSidebarWidth],
+    [prefs, setCopyAsMarkdown, setSidebarGroupByRepo, zoomIn, zoomOut, zoomReset, contentZoomIn, contentZoomOut, contentZoomReset, setContentWidth, setContentFont, setSidebarWidth, resetSidebarWidth],
   );
 
   return (

@@ -31,6 +31,8 @@ pub struct Settings {
     #[serde(default)]
     pub content_width: Option<String>,
     #[serde(default)]
+    pub content_font: Option<String>,
+    #[serde(default)]
     pub sidebar_left_width: Option<u32>,
     #[serde(default)]
     pub sidebar_right_width: Option<u32>,
@@ -359,5 +361,6 @@ mod tests {
         assert_eq!(settings.zoom, Some(1.1));
         assert_eq!(settings.content_zoom, None);
         assert_eq!(settings.content_width, None);
+        assert_eq!(settings.content_font, None);
     }
 }

@@ -23,6 +23,8 @@ import {
   UI_ZOOM_MIN,
   usePreferences,
   type ContentWidth,
+  type ContentFont,
+  CONTENT_FONT_LABELS,
 } from "@/lib/preferences";
 import type { SplitDirection } from "@/lib/workspace";
 
@@ -50,6 +52,8 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
     contentZoomReset,
     contentWidth,
     setContentWidth,
+    contentFont,
+    setContentFont,
   } = usePreferences();
   const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
 
@@ -219,6 +223,18 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
               <DropdownMenuRadioItem value="narrow">Narrow</DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="wide">Wide</DropdownMenuRadioItem>
               <DropdownMenuRadioItem value="full">Full</DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">Content Font</DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={contentFont}
+              onValueChange={(font) => setContentFont(font as ContentFont)}
+            >
+              {(Object.keys(CONTENT_FONT_LABELS) as ContentFont[]).map((font) => (
+                <DropdownMenuRadioItem key={font} value={font}>
+                  {CONTENT_FONT_LABELS[font]}
+                </DropdownMenuRadioItem>
+              ))}
             </DropdownMenuRadioGroup>
             <DropdownMenuSeparator />
             <DropdownMenuSub>

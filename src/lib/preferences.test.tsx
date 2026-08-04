@@ -7,8 +7,8 @@ import {
 } from "./preferences";
 
 function Probe() {
-  const { contentWidth, contentZoom, zoom } = usePreferences();
-  return <span>{`${zoom}:${contentZoom}:${contentWidth}`}</span>;
+  const { contentWidth, contentZoom, contentFont, zoom } = usePreferences();
+  return <span>{`${zoom}:${contentZoom}:${contentWidth}:${contentFont}`}</span>;
 }
 
 describe("PreferencesProvider", () => {
@@ -31,6 +31,21 @@ describe("PreferencesProvider", () => {
       </PreferencesProvider>,
     );
 
-    expect(html).toContain("1.2:1:narrow");
+    expect(html).toContain("1.2:1:narrow:geist");
+  });
+
+  it("falls back to the default font when the stored value is unknown", () => {
+    localStorage.setItem(
+      "marque:preferences",
+      JSON.stringify({ contentFont: "comic-sans" }),
+    );
+
+    const html = renderToString(
+      <PreferencesProvider>
+        <Probe />
+      </PreferencesProvider>,
+    );
+
+    expect(html).toContain("1:1:narrow:geist");
   });
 });

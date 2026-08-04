@@ -143,6 +143,7 @@ pub struct PreferencesPayload {
     pub zoom: Option<f64>,
     pub content_zoom: Option<f64>,
     pub content_width: Option<String>,
+    pub content_font: Option<String>,
     pub sidebar_left_width: Option<u32>,
     pub sidebar_right_width: Option<u32>,
     pub copy_as_markdown: Option<bool>,
@@ -158,6 +159,7 @@ pub fn save_preferences(
         s.zoom = prefs.zoom;
         s.content_zoom = prefs.content_zoom;
         s.content_width = prefs.content_width;
+        s.content_font = prefs.content_font;
         s.sidebar_left_width = prefs.sidebar_left_width;
         s.sidebar_right_width = prefs.sidebar_right_width;
         s.copy_as_markdown = prefs.copy_as_markdown;
@@ -172,6 +174,7 @@ pub fn load_preferences(registry: State<'_, SharedRegistry>) -> PreferencesPaylo
         zoom: s.zoom,
         content_zoom: s.content_zoom,
         content_width: s.content_width,
+        content_font: s.content_font,
         sidebar_left_width: s.sidebar_left_width,
         sidebar_right_width: s.sidebar_right_width,
         copy_as_markdown: s.copy_as_markdown,

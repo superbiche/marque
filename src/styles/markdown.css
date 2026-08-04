@@ -2,6 +2,7 @@
 
 .markdown-body {
   @apply text-foreground leading-7;
+  font-family: var(--content-font, inherit);
   font-size: calc(0.9375rem * var(--content-zoom, 1));
   max-width: 860px;
   margin: 0 auto;
