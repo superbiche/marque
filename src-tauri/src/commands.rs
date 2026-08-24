@@ -198,6 +198,10 @@ pub fn get_settings_load_status(
 /// the invoke handler panics with "Cannot start a runtime from within a
 /// runtime". A blocking thread has no runtime entered, so the nested
 /// `block_on` is safe there.
+///
+/// Upstream bug: <https://github.com/tauri-apps/plugins-workspace/issues/3552>
+/// — once a fixed plugin release ships, this wrapper can be dropped in favor
+/// of the plugin's own JS `revealItemInDir` (plus its capability grant).
 #[tauri::command]
 pub async fn reveal_in_file_manager(path: String) -> AppResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
