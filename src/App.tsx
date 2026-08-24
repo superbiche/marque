@@ -55,6 +55,9 @@ function AppShell() {
   const [pendingFragment, setPendingFragment] = useState<{ path: string; fragment: string } | null>(null);
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
   const [pinnedFiles, setPinnedFiles] = useState<string[]>([]);
+  // True once a pin/unpin response has been applied — from then on the
+  // backend-returned lists are authoritative over the initial load.
+  const pinsMutatedRef = useRef(false);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(state.tabs);
   const activeTabRef = useRef<TabState | undefined>(undefined);
@@ -109,7 +112,11 @@ function AppShell() {
       const target = await tauri.getInitialTarget();
       if (target.kind === "file") openFile(target.path);
       refreshFolders();
-      tauri.listPinnedFiles().then(setPinnedFiles).catch((err) => {
+      tauri.listPinnedFiles().then((pinned) => {
+        // A pin/unpin response carries the newer list; don't let a slow
+        // initial load overwrite it.
+        if (!pinsMutatedRef.current) setPinnedFiles(pinned);
+      }).catch((err) => {
         console.error("failed to load pinned files", err);
       });
     })();
@@ -344,7 +351,9 @@ function AppShell() {
 
   const handlePinFile = useCallback(async (path: string) => {
     try {
-      setPinnedFiles(await tauri.pinFile(path));
+      const pinned = await tauri.pinFile(path);
+      pinsMutatedRef.current = true;
+      setPinnedFiles(pinned);
     } catch (err) {
       console.error("failed to pin file", err);
       notifyApp("Could not pin the file.");
@@ -353,7 +362,9 @@ function AppShell() {
 
   const handleUnpinFile = useCallback(async (path: string) => {
     try {
-      setPinnedFiles(await tauri.unpinFile(path));
+      const pinned = await tauri.unpinFile(path);
+      pinsMutatedRef.current = true;
+      setPinnedFiles(pinned);
     } catch (err) {
       console.error("failed to unpin file", err);
       notifyApp("Could not unpin the file.");
