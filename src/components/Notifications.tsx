@@ -10,6 +10,14 @@ interface Notification {
 
 let nextNotificationId = 0;
 
+const NOTIFY_EVENT = "marque:notify";
+
+// In-app toast from anywhere in the frontend. The Notifications component is
+// the single sink; it aggregates this alongside its Tauri event sources.
+export function notifyApp(message: string) {
+  window.dispatchEvent(new CustomEvent(NOTIFY_EVENT, { detail: message }));
+}
+
 export const Notifications = memo(function Notifications() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
@@ -45,6 +53,15 @@ export const Notifications = memo(function Notifications() {
     return () => {
       off.then((unlisten) => unlisten());
     };
+  }, [notify]);
+
+  useEffect(() => {
+    const onNotify = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (typeof detail === "string") notify(detail);
+    };
+    window.addEventListener(NOTIFY_EVENT, onNotify);
+    return () => window.removeEventListener(NOTIFY_EVENT, onNotify);
   }, [notify]);
 
   useEffect(() => {

@@ -167,7 +167,9 @@ export const Viewer = React.memo(function Viewer({
 
     root.addEventListener("copy", onCopy);
     return () => root.removeEventListener("copy", onCopy);
-  }, [source, copyAsMarkdown]);
+    // renderState.key: the article remounts when the key changes, so the
+    // listener must re-attach to the replacement node.
+  }, [source, copyAsMarkdown, renderState.key]);
 
   // Own all markdown-link navigation here so filesystem links never navigate
   // the webview away from the current document.
@@ -208,7 +210,9 @@ export const Viewer = React.memo(function Viewer({
 
     root.addEventListener("click", onClick);
     return () => root.removeEventListener("click", onClick);
-  }, [filePath, onOpenLink, ref, scrollToAnchor]);
+    // renderState.key: the article remounts when the key changes, so the
+    // listener must re-attach to the replacement node.
+  }, [filePath, onOpenLink, ref, scrollToAnchor, renderState.key]);
 
   // Memoize the inner-html object so its reference is stable across renders.
   // If we passed a fresh { __html: html } object every render, React would

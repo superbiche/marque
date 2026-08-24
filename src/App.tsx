@@ -10,7 +10,7 @@ import { Pane } from "@/components/Pane";
 import { TableOfContents } from "@/components/TableOfContents";
 import { Toolbar } from "@/components/Toolbar";
 import { CommandPalette } from "@/components/CommandPalette";
-import { Notifications } from "@/components/Notifications";
+import { Notifications, notifyApp } from "@/components/Notifications";
 import { tauri, onCliTarget, onFolderChanged, onFileChanged, type AnnotatedFolder } from "@/lib/tauri";
 import {
   createInitialState,
@@ -178,16 +178,21 @@ function AppShell() {
     try {
       if (goLight) {
         const paneId = state.activePaneId;
-        const rendered = new Promise<void>((resolve) => {
-          const waiter = { paneId, resolve };
+        const rendered = new Promise<boolean>((resolve) => {
+          const waiter = { paneId, resolve: () => resolve(true) };
           renderWaitersRef.current.push(waiter);
           window.setTimeout(() => {
             renderWaitersRef.current = renderWaitersRef.current.filter((w) => w !== waiter);
-            resolve();
+            resolve(false);
           }, PRINT_RENDER_TIMEOUT_MS);
         });
         setPrintLight(true);
-        await rendered;
+        if (!(await rendered)) {
+          // Printing whatever is in the DOM at this point could emit raw,
+          // half-highlighted markup — abort visibly instead.
+          notifyApp("Print cancelled: the document did not finish re-rendering for print.");
+          return;
+        }
       }
       await nextFrame();
       await nextFrame();
