@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.3] - 2026-08-24
 
 ### Added
 - View file location: the toolbar folder button, or the new right-click menu on a tab, opens the file's directory in the system file manager with the file selected.
