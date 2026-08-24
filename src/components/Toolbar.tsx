@@ -14,7 +14,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
-import { Search, Sun, Moon, Monitor, FileText, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus, ZoomIn, ZoomOut } from "lucide-react";
+import { Search, Sun, Moon, Monitor, FileText, Printer, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { useTheme, type Theme } from "@/lib/theme";
 import {
   CONTENT_ZOOM_MAX,
@@ -35,9 +35,10 @@ interface Props {
   onCloseSplit: () => void;
   isSplit: boolean;
   onFind: () => void;
+  onPrint: () => void;
 }
 
-export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind }: Props) {
+export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind, onPrint }: Props) {
   const { theme, setTheme } = useTheme();
   const {
     copyAsMarkdown,
@@ -58,7 +59,7 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
   const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Monitor;
 
   return (
-    <header className="flex h-9 shrink-0 items-center justify-between border-b bg-card/40 px-3">
+    <header className="print-hide flex h-9 shrink-0 items-center justify-between border-b bg-card/40 px-3">
       <div className="truncate text-xs text-muted-foreground">{filePath ?? "No file open"}</div>
       <div className="flex items-center gap-1">
         <Tooltip>
@@ -68,6 +69,14 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
             </Button>
           </TooltipTrigger>
           <TooltipContent>Find in document (⌘F)</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button onClick={onPrint} variant="ghost" size="icon" className="h-7 w-7">
+              <Printer className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Print (⌘P)</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>

@@ -167,3 +167,75 @@
 
 .markdown-body.markdown-width-wide { max-width: 1200px; }
 .markdown-body.markdown-width-full { max-width: none; }
+
+@media print {
+  /* Full page width, and neither content zoom nor the width mode applies —
+     the paper size and the dialog's margins decide the measure. */
+  .markdown-body,
+  .markdown-body.markdown-width-wide,
+  .markdown-body.markdown-width-full {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    font-size: 0.9375rem;
+  }
+
+  /* Shiki paints its palette inline and mermaid bakes it into the SVG; without
+     exact color adjust the browser drops those backgrounds when printing. */
+  .markdown-body pre,
+  .markdown-body pre.shiki,
+  .markdown-body code:not(pre code),
+  .markdown-body .mermaid-block,
+  .markdown-body th,
+  .markdown-body tr:nth-child(2n) td {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* On screen these scroll horizontally; on paper they have to wrap instead. */
+  .markdown-body pre,
+  .markdown-body pre > code,
+  .markdown-body pre.shiki,
+  .markdown-body .mermaid-block {
+    overflow: visible;
+  }
+  .markdown-body pre > code,
+  .markdown-body pre.shiki {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .markdown-body table {
+    display: table;
+    overflow: visible;
+  }
+
+  .markdown-body pre,
+  .markdown-body table,
+  .markdown-body blockquote,
+  .markdown-body img,
+  .markdown-body .mermaid-block {
+    break-inside: avoid;
+  }
+  .markdown-body tr {
+    break-inside: avoid;
+  }
+  .markdown-body h1,
+  .markdown-body h2,
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    break-after: avoid;
+  }
+
+  /* Viewer affordances that have no meaning on paper. */
+  .markdown-body .copy-code-btn {
+    display: none;
+  }
+  .markdown-body mark.doc-search-match,
+  .markdown-body mark.doc-search-match.doc-search-active {
+    background: transparent;
+    color: inherit;
+    outline: none;
+  }
+}

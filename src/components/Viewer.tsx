@@ -218,8 +218,13 @@ export const Viewer = React.memo(function Viewer({
   const dangerousHtml = React.useMemo(() => ({ __html: html }), [html]);
 
   return (
-    <div ref={scrollerRef} className="h-full w-full overflow-auto">
+    <div ref={scrollerRef} className="viewer-scroll h-full w-full overflow-auto">
+      {/* Keyed by cache key: renderMarkdown() yields the same string for both
+          themes, so without a remount React would skip re-applying innerHTML
+          after a theme flip and leave the previous theme's Shiki markup in the
+          DOM (and cache it under the new theme's key). */}
       <article
+        key={renderState.key}
         ref={ref}
         className={`markdown-body markdown-width-${contentWidth}`}
         dangerouslySetInnerHTML={dangerousHtml}

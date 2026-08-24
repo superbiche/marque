@@ -143,3 +143,56 @@
     @apply bg-background text-foreground antialiased font-sans;
   }
 }
+
+/* Printing. The app is a stack of fixed-height flex boxes ending in the
+   Viewer's own scroller, so every ancestor of the article has to be released
+   to auto height / visible overflow or the output stops after one page.
+   Only the focused pane prints; all app chrome is dropped. */
+@media print {
+  html,
+  body,
+  #root,
+  .app-root,
+  .app-main-column,
+  .app-body-row,
+  .app-main,
+  .app-split,
+  .app-pane-slot,
+  .pane-root,
+  .pane-content,
+  .viewer-scroll {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    flex: none !important;
+    width: auto !important;
+  }
+
+  /* UI zoom is an inline font-size on <html>; a print run should not inherit it. */
+  html {
+    font-size: 16px !important;
+  }
+
+  body {
+    background: #fff !important;
+  }
+
+  /* Radix renders tooltips, dropdowns and the command palette into portals
+     appended to <body>, outside #root — including the tooltip still open on
+     the print button itself. */
+  body > *:not(#root),
+  .print-hide {
+    display: none !important;
+  }
+
+  .app-pane-slot:not([data-pane-focused="true"]) {
+    display: none !important;
+  }
+
+  /* Focus ring on the printing pane. */
+  .pane-root {
+    box-shadow: none !important;
+  }
+}

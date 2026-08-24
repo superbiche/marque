@@ -51,7 +51,7 @@ export function ResizeHandle({ side, onResize, onReset, className }: Props) {
   return (
     <div
       className={cn(
-        "relative z-10 w-0 shrink-0",
+        "print-hide relative z-10 w-0 shrink-0",
         className,
       )}
       onPointerDown={onPointerDown}

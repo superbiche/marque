@@ -28,7 +28,7 @@ export const TabBar = memo(function TabBar({ pane, tabs, isFocused, onSelect, on
     <div
       onMouseDown={() => onFocusPane(pane.id)}
       className={cn(
-        "flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b bg-card/40 px-1 pt-1",
+        "print-hide flex h-9 shrink-0 items-end gap-0.5 overflow-x-auto border-b bg-card/40 px-1 pt-1",
         !isFocused && "opacity-70"
       )}
     >

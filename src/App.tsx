@@ -1,7 +1,7 @@
 import { useEffect, useReducer, useState, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ThemeProvider } from "@/lib/theme";
+import { ThemeProvider, useTheme } from "@/lib/theme";
 import { PreferencesProvider, usePreferences } from "@/lib/preferences";
 import { ResizeHandle } from "@/components/ResizeHandle";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -39,6 +39,14 @@ marque ./docs/         # open a folder (auto-saved)
 \`\`\`
 `;
 
+// Cap on how long the print flow waits for the light re-render, so a missed
+// render callback can never leave the print button doing nothing.
+const PRINT_RENDER_TIMEOUT_MS = 4000;
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
+}
+
 function AppShell() {
   const [state, dispatch] = useReducer(reduce, undefined, () => createInitialState(WELCOME));
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -47,6 +55,7 @@ function AppShell() {
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(state.tabs);
+  const { resolved, setPrintLight } = useTheme();
   const {
     contentZoomIn, contentZoomOut, contentZoomReset,
     sidebarLeftWidth, sidebarRightWidth,
@@ -144,6 +153,51 @@ function AppShell() {
     };
   }, [openFile, refreshFolders]);
 
+  // Print always goes out on the light theme: Shiki and mermaid bake theme
+  // colors into the rendered markup, so a dark document has to be re-rendered
+  // in light before the dialog opens. window.print() blocks until the dialog is
+  // dismissed, and this webview never fires beforeprint/afterprint.
+  const printingRef = useRef(false);
+  const renderWaitersRef = useRef<{ paneId: string; resolve: () => void }[]>([]);
+
+  const handleContentRendered = useCallback((paneId: string) => {
+    // A highlight pass already in flight when we flip resolves while the root is
+    // still dark. Ignoring those keeps us from printing the stale dark markup.
+    if (document.documentElement.classList.contains("dark")) return;
+    renderWaitersRef.current = renderWaitersRef.current.filter((waiter) => {
+      if (waiter.paneId !== paneId) return true;
+      waiter.resolve();
+      return false;
+    });
+  }, []);
+
+  const handlePrint = useCallback(async () => {
+    if (printingRef.current) return;
+    printingRef.current = true;
+    const goLight = resolved === "dark";
+    try {
+      if (goLight) {
+        const paneId = state.activePaneId;
+        const rendered = new Promise<void>((resolve) => {
+          const waiter = { paneId, resolve };
+          renderWaitersRef.current.push(waiter);
+          window.setTimeout(() => {
+            renderWaitersRef.current = renderWaitersRef.current.filter((w) => w !== waiter);
+            resolve();
+          }, PRINT_RENDER_TIMEOUT_MS);
+        });
+        setPrintLight(true);
+        await rendered;
+      }
+      await nextFrame();
+      await nextFrame();
+      window.print();
+    } finally {
+      if (goLight) setPrintLight(false);
+      printingRef.current = false;
+    }
+  }, [resolved, setPrintLight, state.activePaneId]);
+
   // Global keyboard shortcuts.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -158,6 +212,9 @@ function AppShell() {
       } else if (meta && k === "f") {
         e.preventDefault();
         setSearchPaneId(state.activePaneId);
+      } else if (meta && k === "p") {
+        e.preventDefault();
+        handlePrint();
       } else if (meta && e.key === "\\") {
         e.preventDefault();
         dispatch({ type: "SPLIT", direction: e.shiftKey ? "horizontal" : "vertical" });
@@ -178,7 +235,7 @@ function AppShell() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.activePaneId, activePane.activeTabId, activePane.id, contentZoomIn, contentZoomOut, contentZoomReset]);
+  }, [state.activePaneId, activePane.activeTabId, activePane.id, contentZoomIn, contentZoomOut, contentZoomReset, handlePrint]);
 
   // File drop opens as new tab.
   useEffect(() => {
@@ -245,13 +302,14 @@ function AppShell() {
         onOpenLink={openLink}
         fragment={fragment}
         onFragmentHandled={handleFragmentHandled}
+        onContentRendered={handleContentRendered}
       />
     );
   };
 
   return (
-    <div className="flex h-full">
-      <div ref={sidebarRef} className="flex h-full min-h-0 shrink-0" style={{ width: sidebarLeftWidth }}>
+    <div className="app-root flex h-full">
+      <div ref={sidebarRef} className="print-hide flex h-full min-h-0 shrink-0" style={{ width: sidebarLeftWidth }}>
         <FolderSidebar
           folders={folders}
           activePath={activeTab?.filePath}
@@ -264,7 +322,7 @@ function AppShell() {
         onResize={(w) => setSidebarWidth("left", w)}
         onReset={() => resetSidebarWidth("left")}
       />
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="app-main-column flex min-w-0 flex-1 flex-col">
         <Toolbar
           filePath={activeTab?.filePath}
           onOpenFile={handlePickFile}
@@ -272,22 +330,27 @@ function AppShell() {
           onCloseSplit={handleCloseSplit}
           isSplit={isSplit}
           onFind={handleFind}
+          onPrint={handlePrint}
         />
-        <div className="flex min-h-0 flex-1">
-          <main className="min-w-0 flex-1">
+        <div className="app-body-row flex min-h-0 flex-1">
+          <main className="app-main min-w-0 flex-1">
             <div
               className={cn(
-                "flex h-full",
+                "app-split flex h-full",
                 state.split === "horizontal" ? "flex-col" : "flex-row"
               )}
             >
               {state.panes.map((p, i) => (
-                <div key={p.id} className="flex min-h-0 min-w-0 flex-1">
+                <div
+                  key={p.id}
+                  className="app-pane-slot flex min-h-0 min-w-0 flex-1"
+                  data-pane-focused={p.id === state.activePaneId}
+                >
                   {renderPane(p.id)}
                   {i < state.panes.length - 1 && (
                     <div
                       className={cn(
-                        "shrink-0 bg-border",
+                        "print-hide shrink-0 bg-border",
                         state.split === "horizontal" ? "h-px w-full" : "h-full w-px"
                       )}
                     />
@@ -304,7 +367,7 @@ function AppShell() {
                 onReset={() => resetSidebarWidth("right")}
                 className="hidden lg:flex"
               />
-              <aside className="hidden shrink-0 border-l bg-card/30 lg:block" style={{ width: sidebarRightWidth }}>
+              <aside className="print-hide hidden shrink-0 border-l bg-card/30 lg:block" style={{ width: sidebarRightWidth }}>
                 <TableOfContents source={activeTab?.source ?? ""} />
               </aside>
             </>

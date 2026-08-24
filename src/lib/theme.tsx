@@ -8,6 +8,12 @@ interface Ctx {
   theme: Theme;
   resolved: "light" | "dark";
   setTheme: (t: Theme) => void;
+  /**
+   * Transient light override used while printing. Shiki and mermaid bake theme
+   * colors into the rendered markup, so printing readable output means actually
+   * re-rendering in light. Never persisted — the user's choice is untouched.
+   */
+  setPrintLight: (on: boolean) => void;
 }
 
 const ThemeContext = React.createContext<Ctx | null>(null);
@@ -33,26 +39,31 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (typeof window === "undefined") return "system";
     return (localStorage.getItem(STORAGE_KEY) as Theme) || "system";
   });
+  const [printLight, setPrintLight] = React.useState(false);
   const [resolved, setResolved] = React.useState<"light" | "dark">(() => resolveTheme(theme));
+  const effective: Theme = printLight ? "light" : theme;
 
   React.useEffect(() => {
-    setResolved(applyTheme(theme));
-  }, [theme]);
+    setResolved(applyTheme(effective));
+  }, [effective]);
 
   React.useEffect(() => {
-    if (theme !== "system") return;
+    if (effective !== "system") return;
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onChange = () => setResolved(applyTheme("system"));
     media.addEventListener("change", onChange);
     return () => media.removeEventListener("change", onChange);
-  }, [theme]);
+  }, [effective]);
 
   const setTheme = React.useCallback((t: Theme) => {
     localStorage.setItem(STORAGE_KEY, t);
     setThemeState(t);
   }, []);
 
-  const value = React.useMemo(() => ({ theme, resolved, setTheme }), [theme, resolved, setTheme]);
+  const value = React.useMemo(
+    () => ({ theme, resolved, setTheme, setPrintLight }),
+    [theme, resolved, setTheme],
+  );
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 

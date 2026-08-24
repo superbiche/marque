@@ -55,7 +55,7 @@ export const Notifications = memo(function Notifications() {
   if (notifications.length === 0) return null;
 
   return (
-    <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
+    <div className="print-hide pointer-events-none fixed right-4 bottom-4 z-50 flex w-[min(24rem,calc(100vw-2rem))] flex-col gap-2" aria-live="polite">
       {notifications.map((notification) => (
         <div key={notification.id} className="pointer-events-auto flex items-start gap-3 rounded-2xl border bg-popover p-3 text-sm text-popover-foreground shadow-lg">
           <p className="min-w-0 flex-1">{notification.message}</p>

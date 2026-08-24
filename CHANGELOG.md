@@ -8,6 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Added
+- Print the open document: toolbar printer button or ⌘P. Output always uses the light theme (code blocks and mermaid diagrams bake their colors in, so a dark document would print unreadable), and app chrome, sidebars and the unfocused pane of a split are left off the page — the persisted theme choice is untouched.
+
+### Fixed
+- Switching theme now re-highlights code blocks: previously they kept the old theme's colors until the file was reopened (and the stale markup could get cached under the new theme).
+
 ## [0.4.1] - 2026-08-05
 
 ### Added
