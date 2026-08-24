@@ -309,7 +309,7 @@ function AppShell() {
   }, []);
 
   const copyToClipboard = useCallback(async (text: string | undefined, message: string) => {
-    if (!text) {
+    if (text === undefined) {
       notifyApp("Nothing to copy.");
       return;
     }

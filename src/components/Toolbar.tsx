@@ -82,7 +82,7 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button onClick={onRevealFile} variant="ghost" size="icon" className="h-7 w-7" aria-label="View file location">
+            <Button onClick={onRevealFile} variant="ghost" size="icon" className="h-7 w-7" aria-label="View file location" disabled={!filePath}>
               <FolderOpen className="h-3.5 w-3.5" />
             </Button>
           </TooltipTrigger>
