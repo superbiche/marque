@@ -5,6 +5,7 @@ use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
 use crate::settings::{settings_dir, Folder, SettingsLoadStatus};
 use crate::watcher::{hydrate_folder, SharedWatchers};
+use anyhow::Context as _;
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -187,4 +188,23 @@ pub fn get_settings_load_status(
     status: State<'_, SettingsLoadStatus>,
 ) -> SettingsLoadStatus {
     (*status).clone()
+}
+
+/// Show a file in the system file manager.
+///
+/// This wraps `tauri-plugin-opener`'s sync Rust API instead of invoking its
+/// `reveal_item_in_dir` command from JS: on Linux the plugin blocks on zbus,
+/// which spins up its own tokio runtime, and doing that on the thread driving
+/// the invoke handler panics with "Cannot start a runtime from within a
+/// runtime". A blocking thread has no runtime entered, so the nested
+/// `block_on` is safe there.
+#[tauri::command]
+pub async fn reveal_in_file_manager(path: String) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        tauri_plugin_opener::reveal_item_in_dir(&path)
+            .with_context(|| format!("failed to reveal {path} in the file manager"))
+    })
+    .await
+    .context("reveal task did not complete")??;
+    Ok(())
 }

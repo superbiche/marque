@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Added
+- View file location: the toolbar folder button, or the new right-click menu on a tab, opens the file's directory in the system file manager with the file selected.
+- Copy content: the toolbar copy button, or the tab right-click menu, puts the open document's markdown source on the clipboard. The same menu can copy the file's path instead.
+
 ## [0.4.2] - 2026-08-24
 
 ### Added

@@ -18,6 +18,7 @@ import {
   getActivePane,
   getActiveTab,
   type SplitDirection,
+  type TabState,
 } from "@/lib/workspace";
 import { cn } from "@/lib/utils";
 
@@ -55,6 +56,7 @@ function AppShell() {
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(state.tabs);
+  const activeTabRef = useRef<TabState | undefined>(undefined);
   const { resolved, setPrintLight } = useTheme();
   const {
     contentZoomIn, contentZoomOut, contentZoomReset,
@@ -69,6 +71,12 @@ function AppShell() {
   useEffect(() => {
     tabsRef.current = state.tabs;
   }, [state.tabs]);
+
+  // The toolbar is memoized, so its handlers have to stay identity-stable while
+  // the active tab (and its watcher-refreshed source) changes underneath them.
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
 
   const refreshFolders = useCallback(async () => {
     const list = await tauri.listFoldersGrouped();
@@ -287,6 +295,49 @@ function AppShell() {
   const handleOpenPalette = useCallback(() => setPaletteOpen(true), []);
   const handleFragmentHandled = useCallback(() => setPendingFragment(null), []);
 
+  const revealFile = useCallback(async (filePath?: string) => {
+    if (!filePath) {
+      notifyApp("No file to show: this tab is not backed by a file on disk.");
+      return;
+    }
+    try {
+      await tauri.revealInFileManager(filePath);
+    } catch (err) {
+      console.error("failed to reveal file", err);
+      notifyApp("Could not open the file location.");
+    }
+  }, []);
+
+  const copyToClipboard = useCallback(async (text: string | undefined, message: string) => {
+    if (!text) {
+      notifyApp("Nothing to copy.");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(text);
+      notifyApp(message);
+    } catch (err) {
+      console.error("failed to write to clipboard", err);
+      notifyApp("Could not copy to the clipboard.");
+    }
+  }, []);
+
+  const handleCopyContent = useCallback((source?: string) => {
+    void copyToClipboard(source, "Content copied");
+  }, [copyToClipboard]);
+  const handleCopyPath = useCallback((filePath?: string) => {
+    void copyToClipboard(filePath, "Path copied");
+  }, [copyToClipboard]);
+  const handleRevealFile = useCallback((filePath?: string) => {
+    void revealFile(filePath);
+  }, [revealFile]);
+  const handleRevealActiveFile = useCallback(() => {
+    void revealFile(activeTabRef.current?.filePath);
+  }, [revealFile]);
+  const handleCopyActiveContent = useCallback(() => {
+    void copyToClipboard(activeTabRef.current?.source, "Content copied");
+  }, [copyToClipboard]);
+
   const renderPane = (paneId: string) => {
     const pane = state.panes.find((p) => p.id === paneId)!;
     const paneTab = pane.activeTabId ? state.tabs[pane.activeTabId] : undefined;
@@ -308,6 +359,9 @@ function AppShell() {
         fragment={fragment}
         onFragmentHandled={handleFragmentHandled}
         onContentRendered={handleContentRendered}
+        onRevealFile={handleRevealFile}
+        onCopyContent={handleCopyContent}
+        onCopyPath={handleCopyPath}
       />
     );
   };
@@ -336,6 +390,8 @@ function AppShell() {
           isSplit={isSplit}
           onFind={handleFind}
           onPrint={handlePrint}
+          onRevealFile={handleRevealActiveFile}
+          onCopyContent={handleCopyActiveContent}
         />
         <div className="app-body-row flex min-h-0 flex-1">
           <main className="app-main min-w-0 flex-1">

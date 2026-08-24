@@ -64,6 +64,7 @@ export const tauri = {
     invoke<void>("save_preferences", { prefs }),
   loadPreferences: () => invoke<PreferencesPayload>("load_preferences"),
   getSettingsLoadStatus: () => invoke<SettingsLoadStatus>("get_settings_load_status"),
+  revealInFileManager: (path: string) => invoke<void>("reveal_in_file_manager", { path }),
 };
 
 export interface PreferencesPayload {

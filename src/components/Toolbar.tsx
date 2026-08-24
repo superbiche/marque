@@ -14,7 +14,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
-import { Search, Sun, Moon, Monitor, FileText, Printer, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus, ZoomIn, ZoomOut } from "lucide-react";
+import { Search, Sun, Moon, Monitor, FileText, Printer, FolderOpen, Copy, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { useTheme, type Theme } from "@/lib/theme";
 import {
   CONTENT_ZOOM_MAX,
@@ -36,9 +36,11 @@ interface Props {
   isSplit: boolean;
   onFind: () => void;
   onPrint: () => void;
+  onRevealFile: () => void;
+  onCopyContent: () => void;
 }
 
-export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind, onPrint }: Props) {
+export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind, onPrint, onRevealFile, onCopyContent }: Props) {
   const { theme, setTheme } = useTheme();
   const {
     copyAsMarkdown,
@@ -77,6 +79,22 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
             </Button>
           </TooltipTrigger>
           <TooltipContent>Print (⌘P)</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button onClick={onRevealFile} variant="ghost" size="icon" className="h-7 w-7" aria-label="View file location">
+              <FolderOpen className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>View file location</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button onClick={onCopyContent} variant="ghost" size="icon" className="h-7 w-7" aria-label="Copy content">
+              <Copy className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Copy content</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>

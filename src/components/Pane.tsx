@@ -18,6 +18,9 @@ interface Props {
   fragment?: string;
   onFragmentHandled: () => void;
   onContentRendered?: (paneId: string) => void;
+  onRevealFile: (filePath?: string) => void;
+  onCopyContent: (source?: string) => void;
+  onCopyPath: (filePath?: string) => void;
 }
 
 export const Pane = memo(function Pane({
@@ -33,6 +36,9 @@ export const Pane = memo(function Pane({
   fragment,
   onFragmentHandled,
   onContentRendered,
+  onRevealFile,
+  onCopyContent,
+  onCopyPath,
 }: Props) {
   const activeTab = pane.activeTabId ? tabs[pane.activeTabId] : undefined;
   const articleRef = useRef<HTMLElement>(null);
@@ -57,6 +63,9 @@ export const Pane = memo(function Pane({
         onSelect={onSelectTab}
         onClose={onCloseTab}
         onFocusPane={onFocusPane}
+        onRevealFile={onRevealFile}
+        onCopyContent={onCopyContent}
+        onCopyPath={onCopyPath}
       />
       <div className="pane-content relative flex min-h-0 flex-1">
         {activeTab ? (
