@@ -28,7 +28,7 @@ const tree: TreeNode = {
   ],
 };
 
-function renderTree(expandedDirs: ReadonlySet<string>) {
+function renderTree(expandedDirs: ReadonlySet<string>, pinnedPaths: ReadonlySet<string> = new Set()) {
   return renderToString(
     <FileTreeNode
       node={tree}
@@ -36,6 +36,9 @@ function renderTree(expandedDirs: ReadonlySet<string>) {
       expandedDirs={expandedDirs}
       onToggleDir={() => {}}
       onOpen={() => {}}
+      pinnedPaths={pinnedPaths}
+      onPinFile={() => {}}
+      onUnpinFile={() => {}}
     />,
   );
 }

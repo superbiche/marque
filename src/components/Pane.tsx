@@ -21,6 +21,9 @@ interface Props {
   onRevealFile: (filePath?: string) => void;
   onCopyContent: (source?: string) => void;
   onCopyPath: (filePath?: string) => void;
+  pinnedPaths: ReadonlySet<string>;
+  onPinFile: (path: string) => void;
+  onUnpinFile: (path: string) => void;
 }
 
 export const Pane = memo(function Pane({
@@ -39,6 +42,9 @@ export const Pane = memo(function Pane({
   onRevealFile,
   onCopyContent,
   onCopyPath,
+  pinnedPaths,
+  onPinFile,
+  onUnpinFile,
 }: Props) {
   const activeTab = pane.activeTabId ? tabs[pane.activeTabId] : undefined;
   const articleRef = useRef<HTMLElement>(null);
@@ -66,6 +72,9 @@ export const Pane = memo(function Pane({
         onRevealFile={onRevealFile}
         onCopyContent={onCopyContent}
         onCopyPath={onCopyPath}
+        pinnedPaths={pinnedPaths}
+        onPinFile={onPinFile}
+        onUnpinFile={onUnpinFile}
       />
       <div className="pane-content relative flex min-h-0 flex-1">
         {activeTab ? (

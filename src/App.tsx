@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useReducer, useState, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ThemeProvider, useTheme } from "@/lib/theme";
@@ -54,6 +54,7 @@ function AppShell() {
   const [searchPaneId, setSearchPaneId] = useState<string | null>(null);
   const [pendingFragment, setPendingFragment] = useState<{ path: string; fragment: string } | null>(null);
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
+  const [pinnedFiles, setPinnedFiles] = useState<string[]>([]);
   const sidebarRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(state.tabs);
   const activeTabRef = useRef<TabState | undefined>(undefined);
@@ -108,6 +109,9 @@ function AppShell() {
       const target = await tauri.getInitialTarget();
       if (target.kind === "file") openFile(target.path);
       refreshFolders();
+      tauri.listPinnedFiles().then(setPinnedFiles).catch((err) => {
+        console.error("failed to load pinned files", err);
+      });
     })();
   }, [openFile, refreshFolders]);
 
@@ -338,6 +342,26 @@ function AppShell() {
     void copyToClipboard(activeTabRef.current?.source, "Content copied");
   }, [copyToClipboard]);
 
+  const handlePinFile = useCallback(async (path: string) => {
+    try {
+      setPinnedFiles(await tauri.pinFile(path));
+    } catch (err) {
+      console.error("failed to pin file", err);
+      notifyApp("Could not pin the file.");
+    }
+  }, []);
+
+  const handleUnpinFile = useCallback(async (path: string) => {
+    try {
+      setPinnedFiles(await tauri.unpinFile(path));
+    } catch (err) {
+      console.error("failed to unpin file", err);
+      notifyApp("Could not unpin the file.");
+    }
+  }, []);
+
+  const pinnedPaths = useMemo(() => new Set(pinnedFiles), [pinnedFiles]);
+
   const renderPane = (paneId: string) => {
     const pane = state.panes.find((p) => p.id === paneId)!;
     const paneTab = pane.activeTabId ? state.tabs[pane.activeTabId] : undefined;
@@ -362,6 +386,9 @@ function AppShell() {
         onRevealFile={handleRevealFile}
         onCopyContent={handleCopyContent}
         onCopyPath={handleCopyPath}
+        pinnedPaths={pinnedPaths}
+        onPinFile={handlePinFile}
+        onUnpinFile={handleUnpinFile}
       />
     );
   };
@@ -374,6 +401,12 @@ function AppShell() {
           activePath={activeTab?.filePath}
           onOpenFile={openFile}
           onOpenPalette={handleOpenPalette}
+          pinnedFiles={pinnedFiles}
+          pinnedPaths={pinnedPaths}
+          onPinFile={handlePinFile}
+          onUnpinFile={handleUnpinFile}
+          onRevealFile={handleRevealFile}
+          onCopyPath={handleCopyPath}
         />
       </div>
       <ResizeHandle

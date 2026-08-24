@@ -185,6 +185,23 @@ impl FolderRegistry {
         self.recents.lock().push(path);
     }
 
+    pub fn pinned_files(&self) -> Vec<String> {
+        self.inner.read().settings.pinned_files.clone()
+    }
+
+    /// Pin a file and persist. Returns the updated list — pins only ever
+    /// mutate from the frontend, so the returned list is the refresh
+    /// mechanism (no event emission).
+    pub fn pin_file(&self, dir: &Path, path: String) -> AppResult<Vec<String>> {
+        self.save_with(dir, |settings| settings.pin_file(path))?;
+        Ok(self.pinned_files())
+    }
+
+    pub fn unpin_file(&self, dir: &Path, path: &str) -> AppResult<Vec<String>> {
+        self.save_with(dir, |settings| settings.unpin_file(path))?;
+        Ok(self.pinned_files())
+    }
+
     /// Persist recents off the command path. This only takes the separate
     /// recents lock before spawning, so opening a document never queues behind
     /// a tree rebuild's registry write lock.
@@ -306,6 +323,30 @@ mod tests {
         let second = registry.add_folder(dir.path().to_path_buf()).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(registry.folders().len(), 1);
+    }
+
+    #[test]
+    fn pin_and_unpin_persist_to_disk() {
+        let dir = tempdir().unwrap();
+        let registry = FolderRegistry::from_settings(Settings::default());
+
+        let pinned = registry.pin_file(dir.path(), "/tmp/a.md".into()).unwrap();
+        assert_eq!(pinned, vec!["/tmp/a.md"]);
+        assert_eq!(
+            Settings::load_with_status(dir.path())
+                .unwrap()
+                .settings
+                .pinned_files,
+            vec!["/tmp/a.md"]
+        );
+
+        let pinned = registry.unpin_file(dir.path(), "/tmp/a.md").unwrap();
+        assert!(pinned.is_empty());
+        assert!(Settings::load_with_status(dir.path())
+            .unwrap()
+            .settings
+            .pinned_files
+            .is_empty());
     }
 
     #[test]

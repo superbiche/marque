@@ -1,6 +1,12 @@
 import { memo } from "react";
-import { ChevronRight, FileText, Folder } from "lucide-react";
+import { ChevronRight, FileText, Folder, Pin, PinOff } from "lucide-react";
 import type { TreeNode } from "@/lib/tauri";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { startFileDrag } from "@/lib/dragOut";
 import { cn } from "@/lib/utils";
 
@@ -11,6 +17,9 @@ interface Props {
   expandedDirs: ReadonlySet<string>;
   onToggleDir: (absolutePath: string) => void;
   onOpen: (absolutePath: string) => void;
+  pinnedPaths: ReadonlySet<string>;
+  onPinFile: (path: string) => void;
+  onUnpinFile: (path: string) => void;
   isRoot?: boolean;
 }
 
@@ -21,6 +30,9 @@ export const FileTreeNode = memo(function FileTreeNode({
   expandedDirs,
   onToggleDir,
   onOpen,
+  pinnedPaths,
+  onPinFile,
+  onUnpinFile,
   isRoot,
 }: Props) {
   const open = expandedDirs.has(node.path);
@@ -38,6 +50,9 @@ export const FileTreeNode = memo(function FileTreeNode({
             expandedDirs={expandedDirs}
             onToggleDir={onToggleDir}
             onOpen={onOpen}
+            pinnedPaths={pinnedPaths}
+            onPinFile={onPinFile}
+            onUnpinFile={onUnpinFile}
           />
         ))}
       </ul>
@@ -70,6 +85,9 @@ export const FileTreeNode = memo(function FileTreeNode({
                 expandedDirs={expandedDirs}
                 onToggleDir={onToggleDir}
                 onOpen={onOpen}
+                pinnedPaths={pinnedPaths}
+                onPinFile={onPinFile}
+                onUnpinFile={onUnpinFile}
               />
             ))}
           </ul>
@@ -79,25 +97,38 @@ export const FileTreeNode = memo(function FileTreeNode({
   }
 
   const isActive = node.path === activePath;
+  const pinned = pinnedPaths.has(node.path);
   return (
     <li>
-      <button
-        type="button"
-        onClick={() => onOpen(node.path)}
-        draggable
-        onDragStart={(event) => {
-          event.preventDefault();
-          startFileDrag(node.path);
-        }}
-        className={cn(
-          "flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left hover:bg-accent",
-          isActive && "bg-accent text-accent-foreground"
-        )}
-        style={{ paddingLeft: `${0.4 + (depth + 0.6) * 0.75}rem` }}
-      >
-        <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="truncate">{node.name}</span>
-      </button>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            onClick={() => onOpen(node.path)}
+            draggable
+            onDragStart={(event) => {
+              event.preventDefault();
+              startFileDrag(node.path);
+            }}
+            className={cn(
+              "flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left hover:bg-accent",
+              isActive && "bg-accent text-accent-foreground"
+            )}
+            style={{ paddingLeft: `${0.4 + (depth + 0.6) * 0.75}rem` }}
+          >
+            <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{node.name}</span>
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem
+            onSelect={() => (pinned ? onUnpinFile(node.path) : onPinFile(node.path))}
+          >
+            {pinned ? <PinOff /> : <Pin />}
+            {pinned ? "Unpin file" : "Pin file"}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     </li>
   );
 });

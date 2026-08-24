@@ -40,6 +40,9 @@ pub struct Settings {
     pub copy_as_markdown: Option<bool>,
     #[serde(default)]
     pub sidebar_group_by_repo: Option<bool>,
+    /// Files pinned to the sidebar, in display order.
+    #[serde(default)]
+    pub pinned_files: Vec<String>,
 }
 
 #[cfg(test)]
@@ -115,6 +118,17 @@ impl Settings {
 
     pub fn remove_folder(&mut self, id: &str) {
         self.folders.retain(|v| v.id != id);
+    }
+
+    pub fn pin_file(&mut self, path: String) {
+        if self.pinned_files.contains(&path) {
+            return;
+        }
+        self.pinned_files.push(path);
+    }
+
+    pub fn unpin_file(&mut self, path: &str) {
+        self.pinned_files.retain(|p| p != path);
     }
 }
 
@@ -259,6 +273,51 @@ mod tests {
         assert_eq!(s.recent_files[0], "/p/5.md");
         let occurrences = s.recent_files.iter().filter(|p| *p == "/p/5.md").count();
         assert_eq!(occurrences, 1);
+    }
+
+    #[test]
+    fn pin_file_dedups_and_keeps_order() {
+        let mut s = Settings::default();
+        s.pin_file("/tmp/a.md".into());
+        s.pin_file("/tmp/b.md".into());
+        s.pin_file("/tmp/a.md".into());
+        assert_eq!(s.pinned_files, vec!["/tmp/a.md", "/tmp/b.md"]);
+    }
+
+    #[test]
+    fn unpin_file_removes_entry() {
+        let mut s = Settings::default();
+        s.pin_file("/tmp/a.md".into());
+        s.pin_file("/tmp/b.md".into());
+        s.unpin_file("/tmp/a.md");
+        assert_eq!(s.pinned_files, vec!["/tmp/b.md"]);
+        s.unpin_file("/tmp/missing.md");
+        assert_eq!(s.pinned_files, vec!["/tmp/b.md"]);
+    }
+
+    #[test]
+    fn pinned_files_round_trip() {
+        let dir = tempdir().unwrap();
+        let mut s = Settings::default();
+        s.pin_file("/tmp/a.md".into());
+        s.pin_file("/tmp/b.md".into());
+        s.save(dir.path()).unwrap();
+        let loaded = Settings::load_with_status(dir.path()).unwrap().settings;
+        assert_eq!(loaded.pinned_files, vec!["/tmp/a.md", "/tmp/b.md"]);
+    }
+
+    #[test]
+    fn loads_settings_without_pinned_files() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(FILE_NAME),
+            r#"{"zoom":1.1,"sidebar_left_width":240}"#,
+        )
+        .unwrap();
+
+        let settings = Settings::load_with_status(dir.path()).unwrap().settings;
+
+        assert!(settings.pinned_files.is_empty());
     }
 
     #[test]

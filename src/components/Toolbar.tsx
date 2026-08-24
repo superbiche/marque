@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { memo } from "react";
+import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -66,19 +67,11 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
       <div className="flex items-center gap-1">
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button onClick={onFind} variant="ghost" size="icon" className="h-7 w-7">
-              <Search className="h-3.5 w-3.5" />
+            <Button onClick={onOpenFile} variant="ghost" size="icon" className="h-7 w-7">
+              <FileText className="h-3.5 w-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Find in document (⌘F)</TooltipContent>
-        </Tooltip>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button onClick={onPrint} variant="ghost" size="icon" className="h-7 w-7">
-              <Printer className="h-3.5 w-3.5" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent>Print (⌘P)</TooltipContent>
+          <TooltipContent>Open file (⌘O)</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
@@ -88,6 +81,16 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
           </TooltipTrigger>
           <TooltipContent>View file location</TooltipContent>
         </Tooltip>
+        <Separator orientation="vertical" className="mx-0.5 h-4" />
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button onClick={onFind} variant="ghost" size="icon" className="h-7 w-7">
+              <Search className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Find in document (⌘F)</TooltipContent>
+        </Tooltip>
+        <Separator orientation="vertical" className="mx-0.5 h-4" />
         <Tooltip>
           <TooltipTrigger asChild>
             <Button onClick={onCopyContent} variant="ghost" size="icon" className="h-7 w-7" aria-label="Copy content">
@@ -98,12 +101,13 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
         </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button onClick={onOpenFile} variant="ghost" size="icon" className="h-7 w-7">
-              <FileText className="h-3.5 w-3.5" />
+            <Button onClick={onPrint} variant="ghost" size="icon" className="h-7 w-7">
+              <Printer className="h-3.5 w-3.5" />
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Open file (⌘O)</TooltipContent>
+          <TooltipContent>Print (⌘P)</TooltipContent>
         </Tooltip>
+        <Separator orientation="vertical" className="mx-0.5 h-4" />
         {isSplit ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -163,6 +167,7 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
           </TooltipTrigger>
           <TooltipContent>Content zoom in (⌘+)</TooltipContent>
         </Tooltip>
+        <Separator orientation="vertical" className="mx-0.5 h-4" />
         <DropdownMenu>
           <Tooltip>
             <TooltipTrigger asChild>

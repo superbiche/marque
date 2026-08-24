@@ -1,4 +1,4 @@
-import { ClipboardCopy, Copy, FolderOpen, X } from "lucide-react";
+import { ClipboardCopy, Copy, FolderOpen, Pin, PinOff, X } from "lucide-react";
 import { memo } from "react";
 import {
   ContextMenu,
@@ -20,6 +20,9 @@ interface Props {
   onRevealFile: (filePath?: string) => void;
   onCopyContent: (source?: string) => void;
   onCopyPath: (filePath?: string) => void;
+  pinnedPaths: ReadonlySet<string>;
+  onPinFile: (path: string) => void;
+  onUnpinFile: (path: string) => void;
 }
 
 function tabLabel(tab: TabState | undefined): string {
@@ -42,6 +45,9 @@ export const TabBar = memo(function TabBar({
   onRevealFile,
   onCopyContent,
   onCopyPath,
+  pinnedPaths,
+  onPinFile,
+  onUnpinFile,
 }: Props) {
   return (
     <div
@@ -54,6 +60,7 @@ export const TabBar = memo(function TabBar({
       {pane.tabIds.map((id) => {
         const tab = tabs[id];
         const active = id === pane.activeTabId;
+        const pinned = Boolean(tab?.filePath && pinnedPaths.has(tab.filePath));
         return (
           <ContextMenu key={id}>
             <ContextMenuTrigger asChild>
@@ -96,6 +103,17 @@ export const TabBar = memo(function TabBar({
               >
                 <FolderOpen />
                 View file location
+              </ContextMenuItem>
+              <ContextMenuItem
+                disabled={!tab?.filePath}
+                onSelect={() => {
+                  if (!tab?.filePath) return;
+                  if (pinned) onUnpinFile(tab.filePath);
+                  else onPinFile(tab.filePath);
+                }}
+              >
+                {pinned ? <PinOff /> : <Pin />}
+                {pinned ? "Unpin file" : "Pin file"}
               </ContextMenuItem>
               <ContextMenuItem onSelect={() => onCopyContent(tab?.source)}>
                 <Copy />

@@ -59,6 +59,9 @@ export const tauri = {
   searchFiles: (query: string, limit = 50) =>
     invoke<SearchResult[]>("search_files", { args: { query, limit } }),
   getRecentFiles: () => invoke<string[]>("get_recent_files"),
+  listPinnedFiles: () => invoke<string[]>("list_pinned_files"),
+  pinFile: (path: string) => invoke<string[]>("pin_file", { path }),
+  unpinFile: (path: string) => invoke<string[]>("unpin_file", { path }),
   saveTheme: (theme: string) => invoke<void>("save_theme", { theme }),
   savePreferences: (prefs: PreferencesPayload) =>
     invoke<void>("save_preferences", { prefs }),

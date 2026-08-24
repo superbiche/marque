@@ -9,9 +9,16 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { Plus, X, ChevronDown, ChevronRight, ChevronsDownUp, FolderTree, Search, Layers, List } from "lucide-react";
+import { ClipboardCopy, Plus, X, ChevronDown, ChevronRight, ChevronsDownUp, FileText, FolderOpen, FolderTree, Pin, PinOff, Search, Layers, List } from "lucide-react";
 import { FileTreeNode } from "@/components/FileTree";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { startFileDrag } from "@/lib/dragOut";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -19,6 +26,12 @@ interface Props {
   activePath?: string;
   onOpenFile: (absolutePath: string) => void;
   onOpenPalette: () => void;
+  pinnedFiles: string[];
+  pinnedPaths: ReadonlySet<string>;
+  onPinFile: (path: string) => void;
+  onUnpinFile: (path: string) => void;
+  onRevealFile: (filePath?: string) => void;
+  onCopyPath: (filePath?: string) => void;
 }
 
 interface RepoGroup {
@@ -48,7 +61,18 @@ function groupByRepo(folders: AnnotatedFolder[]): RepoGroup[] {
   return groups;
 }
 
-export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, onOpenFile, onOpenPalette }: Props) {
+export const FolderSidebar = memo(function FolderSidebar({
+  folders,
+  activePath,
+  onOpenFile,
+  onOpenPalette,
+  pinnedFiles,
+  pinnedPaths,
+  onPinFile,
+  onUnpinFile,
+  onRevealFile,
+  onCopyPath,
+}: Props) {
   const [trees, setTrees] = useState<Record<string, TreeNode>>({});
   const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -218,6 +242,9 @@ export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, 
             expandedDirs={expandedDirs}
             onToggleDir={handleToggleDir}
             onOpen={onOpenFile}
+            pinnedPaths={pinnedPaths}
+            onPinFile={onPinFile}
+            onUnpinFile={onUnpinFile}
           />
         )}
       </div>
@@ -241,6 +268,74 @@ export const FolderSidebar = memo(function FolderSidebar({ folders, activePath, 
           </kbd>
         </button>
       </div>
+      {pinnedFiles.length > 0 && (
+        <>
+          <div className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <Pin className="h-3.5 w-3.5" />
+            Pinned
+          </div>
+          <div className="max-h-48 shrink-0 overflow-y-auto px-1">
+            {pinnedFiles.map((path) => {
+              const name = path.split("/").pop() ?? path;
+              const isActive = path === activePath;
+              return (
+                <ContextMenu key={path}>
+                  <ContextMenuTrigger asChild>
+                    <div
+                      className={cn(
+                        "group/pinned flex items-center gap-1 rounded px-1.5 py-0.5 text-sm hover:bg-accent",
+                        isActive && "bg-accent text-accent-foreground"
+                      )}
+                    >
+                      <button
+                        type="button"
+                        title={path}
+                        onClick={() => onOpenFile(path)}
+                        draggable
+                        onDragStart={(event) => {
+                          event.preventDefault();
+                          startFileDrag(path);
+                        }}
+                        className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                      >
+                        <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">{name}</span>
+                      </button>
+                      <Button
+                        onClick={() => onUnpinFile(path)}
+                        variant="ghost"
+                        size="icon"
+                        aria-label="Unpin file"
+                        className={cn(
+                          "h-5 w-5 opacity-0 transition-opacity",
+                          "group-hover/pinned:opacity-100"
+                        )}
+                      >
+                        <X className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onSelect={() => onUnpinFile(path)}>
+                      <PinOff />
+                      Unpin
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={() => onRevealFile(path)}>
+                      <FolderOpen />
+                      View file location
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={() => onCopyPath(path)}>
+                      <ClipboardCopy />
+                      Copy path
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
+              );
+            })}
+          </div>
+        </>
+      )}
+
       <div className="flex items-center justify-between px-3 py-2">
         <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           <FolderTree className="h-3.5 w-3.5" />

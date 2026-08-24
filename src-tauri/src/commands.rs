@@ -135,6 +135,21 @@ pub fn get_recent_files(registry: State<'_, SharedRegistry>) -> Vec<String> {
 }
 
 #[tauri::command]
+pub fn list_pinned_files(registry: State<'_, SharedRegistry>) -> Vec<String> {
+    registry.pinned_files()
+}
+
+#[tauri::command]
+pub fn pin_file(path: String, registry: State<'_, SharedRegistry>) -> AppResult<Vec<String>> {
+    registry.pin_file(&settings_dir(), path)
+}
+
+#[tauri::command]
+pub fn unpin_file(path: String, registry: State<'_, SharedRegistry>) -> AppResult<Vec<String>> {
+    registry.unpin_file(&settings_dir(), &path)
+}
+
+#[tauri::command]
 pub fn save_theme(theme: String, registry: State<'_, SharedRegistry>) -> AppResult<()> {
     registry.save_with(&settings_dir(), |s| s.theme = Some(theme))
 }
