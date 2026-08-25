@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.4] - 2026-08-25
 
 ### Added
 - Pin files to the sidebar: right-click a tab or a file in a folder tree to pin it, and pinned files get their own section above the folder list, independent of folder workspaces. Pins persist across sessions.
