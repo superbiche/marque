@@ -149,6 +149,10 @@
    to auto height / visible overflow or the output stops after one page.
    Only the focused pane prints; all app chrome is dropped. */
 @media print {
+  @page {
+    margin: 16mm 15mm;
+  }
+
   html,
   body,
   #root,

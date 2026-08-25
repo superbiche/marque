@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Changed
+- Paper-friendly print output: body type set at 10.5pt with tighter line spacing and heading margins (instead of inheriting the screen's larger metrics), 15–16mm page margins instead of near edge-to-edge text, and orphan/widow control across page breaks.
+
 ## [0.4.4] - 2026-08-25
 
 ### Added
