@@ -84,8 +84,7 @@ pnpm tauri build         # production bundle
 
 ## Releases & versioning
 
-- Pre-1.0 semver intent: non-breaking feature slices and fixes bump PATCH (`0.4.z`). Bump MINOR only for breaking changes (settings/file format, CLI behavior, capability regressions) or structural rewrites. Ambiguous cases: ask, don't guess.
-- Release recipe: bump the version in `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` (then `cargo check` to refresh the lockfile); retitle the CHANGELOG `[Unreleased]` section to the version + date; commit as `vX.Y.Z`; wait for CI green; push a GPG-signed `vX.Y.Z` tag. The tag triggers `.github/workflows/release.yml` (deb, rpm, AppImage). A release is done only when all three assets exist on the GitHub release.
+- Cutting a release ("cut a release", "let's cut it", version bumps, tags) -> load `my-marque-release` (`.agents/skills/my-marque-release/SKILL.md`).
 - `CHANGELOG.md`: land each slice under `[Unreleased]`; the release workflow extracts the version section for release notes.
 
 ## Testing

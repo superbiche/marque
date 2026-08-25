@@ -39,3 +39,6 @@ coverage
 Thumbs.db
 
 PLAN.md
+
+# Agent session artifacts (screenshots live here, untracked)
+.claude/screenshots/
