@@ -56,7 +56,7 @@ jobs:
   # Deliberately GitHub-hosted: the published deb/rpm/AppImage link against
   # the build host's glibc, and ubuntu-22.04 keeps the floor at 2.35. The
   # marque-ci runner image is Ubuntu 24.04 (glibc 2.39), which would drop
-  # 22.04/Debian 12 users. Tag-triggered only.
+  # 22.04/Debian 12 users. Runs only on a tag push or a manual dispatch.
   build-linux:
     needs: [create-release]
     runs-on: ubuntu-22.04
