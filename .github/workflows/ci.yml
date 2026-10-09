@@ -5,9 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+# Runs on the marque-ci ARC scale set on lugus (superbiche/infra
+# servers/lugus/infra/arc/sets/marque.yaml), not GitHub-hosted runners.
+# runs-on takes the scale-set name only: adding `self-hosted` queues forever.
 jobs:
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: marque-ci
     steps:
       - uses: actions/checkout@v6
 
@@ -30,7 +33,7 @@ jobs:
         run: pnpm test
 
   rust:
-    runs-on: ubuntu-latest
+    runs-on: marque-ci
     steps:
       - uses: actions/checkout@v6
 
@@ -38,6 +41,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            build-essential \
+            pkg-config \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
             librsvg2-dev \
