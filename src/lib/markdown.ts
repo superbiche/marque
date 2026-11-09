@@ -89,7 +89,7 @@ md.renderer.rules.fence = (tokens, idx, options, env, self) => {
 const defaultLink = md.renderer.rules.link_open || ((tokens, idx, options, _env, self) =>
   self.renderToken(tokens, idx, options));
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-  const href = tokens[idx].attrGet("href") || "";
+  const href = String(tokens[idx].attrGet("href") ?? "");
   if (/^https?:\/\//i.test(href)) {
     tokens[idx].attrSet("target", "_blank");
     tokens[idx].attrSet("rel", "noreferrer noopener");
