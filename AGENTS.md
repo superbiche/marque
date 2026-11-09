@@ -93,6 +93,7 @@ pnpm tauri build         # production bundle
 - Frontend: Vitest (`pnpm test`) for `lib/` functions (markdown pipeline, path helpers). No need to test components heavily — this is a viewer, behavior is mostly visual.
 - Typecheck: `pnpm typecheck`.
 - CI (`.github/workflows/ci.yml`) runs typecheck, vitest, cargo test, and clippy with `-D warnings` — keep all four green.
+- The repository is public: every workflow job runs on GitHub-hosted runners (never a self-hosted one — any fork PR could execute on it), actions are pinned to commit SHAs, and workflow permissions stay least-privilege. Dependabot (`.github/dependabot.yml`) owns routine bumps; `.coderabbit.yaml` configures the automated PR review. `src-tauri/.cargo/audit.toml` lists `cargo audit` ignores for transitive advisories with no upstream fix — re-check them on each parent bump.
 - Before reporting a rendering task done, run `pnpm tauri dev` and actually view a markdown file. Type checks don't catch rendering bugs.
 
 ## What not to do

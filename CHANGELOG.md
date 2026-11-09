@@ -6,7 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Hard fork - 2026-08-02
 
-Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (private). Upstream tracking with `GRVYDEV/marky` has ended.
+Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
+
+## [Unreleased]
+
+### Changed
+- The repository is public. CI and the release job run on GitHub-hosted runners; actions are pinned by commit SHA.
+- Dependencies: vitest 4 and happy-dom 21 (test tooling), plus in-range updates that clear every published npm advisory in the tree, including DOMPurify 3.4.17, markdown-it 14.3.3, and Mermaid 11.16.1.
+
+### Added
+- Open-source project files: `CONTRIBUTING.md`, `SECURITY.md` with private vulnerability reporting, `CODE_OF_CONDUCT.md`, `NOTICE`, issue and pull request templates, Dependabot (npm, cargo, GitHub Actions) and a CodeRabbit review configuration.
 
 ## [0.4.5] - 2026-08-25
 

@@ -1,0 +1,11 @@
+Marque
+Copyright 2026 Michel Tomas
+
+Marque is a hard fork of marky (https://github.com/GRVYDEV/marky) by GRVYDEV,
+licensed under the Apache License, Version 2.0. The original work's license
+terms and attribution are preserved; see LICENSE.
+
+Marque bundles third-party components under their own licenses, including
+markdown-it (MIT), Shiki (MIT), Mermaid (MIT), KaTeX (MIT), DOMPurify
+(MPL-2.0 OR Apache-2.0), shadcn/ui (MIT), Tauri (Apache-2.0 OR MIT),
+nucleo (MPL-2.0), and notify (CC0-1.0).
