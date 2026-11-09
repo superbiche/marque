@@ -16,7 +16,7 @@ function decodeHref(href: string): string {
   }
 }
 
-function dirname(path: string): string {
+export function dirname(path: string): string {
   const slash = path.lastIndexOf("/");
   if (slash < 0) return ".";
   if (slash === 0) return "/";

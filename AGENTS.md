@@ -72,6 +72,7 @@ scripts/     Install / dev helper scripts
 - **Always sanitize rendered HTML with DOMPurify** before setting `dangerouslySetInnerHTML`. Markdown files may contain raw HTML.
 - External links (`target="_blank"`) must go through the Tauri opener plugin to open in the system browser, not the webview.
 - Tauri capabilities: grant only `fs:read` on user-selected paths, not blanket filesystem access.
+- Local images go through the Tauri asset protocol. Its static scope in `tauri.conf.json` stays empty; `read_file` extends it at runtime (`fs::grant_asset_scope`) to the opened document's registered folder root or its own directory. Never add a blanket pattern such as `$HOME/**` there. Image `src` rewriting lives in the DOMPurify hook in `src/lib/markdown.ts`; the path resolver (`src/lib/images.ts`) must keep returning `null` for remote and foreign-scheme sources.
 
 ## Running / building
 

@@ -48,6 +48,44 @@ describe("renderMarkdown", () => {
     expect(html).not.toContain('target="_blank"');
   });
 
+  describe("local images", () => {
+    const toAssetUrl = (p: string) => `asset://localhost/${encodeURIComponent(p)}`;
+    const opts = { documentPath: "/docs/README.md", toAssetUrl };
+
+    it("rewrites document-relative markdown images to asset URLs", () => {
+      const html = renderMarkdown("![Diagram](diagram.png)", opts);
+      expect(html).toContain('src="asset://localhost/%2Fdocs%2Fdiagram.png"');
+      expect(html).toContain('alt="Diagram"');
+    });
+
+    it("rewrites raw <img> tags and parent-directory paths", () => {
+      const html = renderMarkdown('<img src="../assets/logo.png" alt="logo">', opts);
+      expect(html).toContain('src="asset://localhost/%2Fassets%2Flogo.png"');
+    });
+
+    it("leaves remote and data images untouched", () => {
+      const html = renderMarkdown("![r](https://example.com/a.png)\n\n![d](data:image/png;base64,AAAA)", opts);
+      expect(html).toContain('src="https://example.com/a.png"');
+      expect(html).toContain('src="data:image/png;base64,AAAA"');
+    });
+
+    it("keeps relative sources as written when the document location is unknown", () => {
+      expect(renderMarkdown("![x](diagram.png)", { toAssetUrl })).toContain('src="diagram.png"');
+      expect(renderMarkdown("![x](diagram.png)")).toContain('src="diagram.png"');
+    });
+
+    it("keeps the original source when the runtime cannot map it", () => {
+      const html = renderMarkdown("![x](diagram.png)", { documentPath: "/docs/a.md", toAssetUrl: () => null });
+      expect(html).toContain('src="diagram.png"');
+    });
+
+    it("drops asset URLs written by the document itself", () => {
+      const html = renderMarkdown('<img src="asset://localhost/%2Fetc%2Fpasswd">', opts);
+      expect(html).toContain("<img");
+      expect(html).not.toContain("asset://");
+    });
+  });
+
   it("sanitizes script tags", () => {
     const html = renderMarkdown("<script>alert(1)</script>\n\nokay");
     expect(html).not.toContain("<script");

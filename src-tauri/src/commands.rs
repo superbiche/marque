@@ -24,8 +24,18 @@ pub fn set_initial_target(target: InitialTarget, state: State<'_, InitialTargetS
 }
 
 #[tauri::command]
-pub fn read_file(path: String, registry: State<'_, SharedRegistry>) -> AppResult<String> {
+pub fn read_file(
+    app: AppHandle,
+    path: String,
+    registry: State<'_, SharedRegistry>,
+) -> AppResult<String> {
     let contents = crate::fs::read_text(&path)?;
+    let document = std::path::Path::new(&path);
+    let folder_root = registry.folder_root_containing(document);
+    if let Err(error) = crate::fs::grant_asset_scope(&app, document, folder_root) {
+        // Images next to the document will not load; the document itself still renders.
+        eprintln!("marque: {error}");
+    }
     registry.push_recent(path);
     Arc::clone(&*registry).persist_async(settings_dir());
     Ok(contents)
