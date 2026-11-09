@@ -48,7 +48,7 @@ Marque started as a hard fork of [marky](https://github.com/GRVYDEV/marky) becau
 Viewing
 
 - **CLI-first** — `marque README.md` opens a window; `marque ./docs/` opens a folder; `marque` alone restores the last session. A second invocation reuses the running window.
-- **Live reload** — edits on disk (from your editor, an agent, a build) update the view instantly.
+- **Live reload** — edits on disk (from your editor, an agent, a build) update the view instantly for files inside a folder workspace.
 - **Tabs and split panes** — open several documents, split the active pane vertically or horizontally, drop a file onto the window to open it.
 - **Document links** — relative and absolute links to other markdown files open in a tab (with `#heading` scroll), in-page anchors scroll, external URLs open in the system browser.
 - **On this page** — a table of contents of the open document; sidebars are resizable.
