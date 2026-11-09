@@ -10,6 +10,12 @@
 
 Hard fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV, Apache-2.0.
 
+<p align="center">
+  <a href="https://github.com/superbiche/marque/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/superbiche/marque/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/superbiche/marque/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/superbiche/marque?sort=semver"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+</p>
+
 <!-- TABLE OF CONTENTS -->
 <details open="open">
   <summary><h2 style="display: inline-block">Table of Contents</h2></summary>
@@ -25,6 +31,8 @@ Hard fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV, Apache-2.0.
     <li><a href="#keyboard-shortcuts">Keyboard Shortcuts</a></li>
     <li><a href="#development">Development</a></li>
     <li><a href="#built-with">Built With</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
   </ol>
 </details>
 
@@ -47,6 +55,20 @@ Marque is a desktop markdown viewer designed for one thing: opening `.md` files 
 - **Small & fast** — native webview, no Electron.
 
 ## Install
+
+### Packages (Linux x86_64)
+
+Every release ships a `.deb`, an `.rpm`, and an `.AppImage` on the [releases page](https://github.com/superbiche/marque/releases/latest). The packages are built on Ubuntu 22.04 (glibc 2.35), so any distribution with glibc 2.35 or newer is expected to work (Ubuntu 22.04+, Debian 12+, Fedora 40+). Marque is developed and tested on Fedora / KDE Plasma / Wayland; other distributions are not routinely tested.
+
+```bash
+# Fedora
+sudo dnf install ./Marque-*.x86_64.rpm
+
+# Debian / Ubuntu
+sudo apt install ./Marque_*_amd64.deb
+```
+
+Then install the CLI wrapper so `marque FILE` works from any terminal. Download [`scripts/install-cli.sh`](scripts/install-cli.sh), read it, and run it; it only writes a small wrapper to `~/.local/bin/marque`.
 
 ### From Source (Fedora / Linux)
 
@@ -135,3 +157,13 @@ scripts/         Install helpers
 | UI primitives       | [shadcn/ui](https://ui.shadcn.com)                        |
 | Styling             | [Tailwind CSS](https://tailwindcss.com)                   |
 | File watching       | [notify](https://github.com/notify-rs/notify)             |
+
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the development setup, the checks CI runs, and what is in and out of scope (marque stays a read-only viewer). Security problems go through [SECURITY.md](SECURITY.md), not public issues.
+
+Marque is a hard fork of [marky](https://github.com/GRVYDEV/marky), renamed and maintained independently since August 2026. It is actively maintained: dependencies are updated weekly through Dependabot and every PR gets CI plus an automated review before a maintainer looks at it.
+
+## License
+
+[Apache License 2.0](LICENSE). See [NOTICE](NOTICE) for attribution to the original marky project and bundled third-party components.

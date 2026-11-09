@@ -1,0 +1,55 @@
+# yaml-language-server: $schema=https://www.coderabbit.ai/integrations/schema.v2.json
+language: en-US
+tone_instructions: Be direct and concrete. Point at the line, say what breaks and why. Skip praise and generic advice.
+reviews:
+  profile: assertive
+  high_level_summary: true
+  collapse_walkthrough: true
+  poem: false
+  review_status: true
+  sequence_diagrams: false
+  suggested_labels: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches: ["main"]
+  path_filters:
+    - "!pnpm-lock.yaml"
+    - "!src-tauri/Cargo.lock"
+    - "!**/*.tsbuildinfo"
+    - "!dist/**"
+  path_instructions:
+    - path: "src/lib/markdown.ts"
+      instructions: >-
+        This is the single markdown-it instance. Flag any second instance elsewhere.
+        Any change to HTML output must keep DOMPurify sanitization downstream intact.
+        Prefer an existing markdown-it plugin over a custom renderer rule.
+    - path: "src/components/**/*.tsx"
+      instructions: >-
+        Rendered HTML must pass through DOMPurify before dangerouslySetInnerHTML.
+        Tauri invoke calls go through src/lib/tauri.ts, never directly.
+        Marque is a read-only viewer: flag anything that introduces editing.
+    - path: "src-tauri/**/*.rs"
+      instructions: >-
+        Paths crossing the Rust/JS boundary are absolute strings. Folder state
+        lives in FolderRegistry only. Errors carry context (anyhow::Context or
+        thiserror). Watch for lock-order changes around the registry and the
+        search index, and for anything that writes inside a user folder.
+    - path: "src-tauri/capabilities/**"
+      instructions: >-
+        Capabilities must stay minimal: no blanket filesystem or shell access.
+        Flag any new permission and ask what feature needs it.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Public repository: jobs must run on GitHub-hosted runners, actions must be
+        pinned to a commit SHA, and permissions must stay least-privilege.
+  tools:
+    gitleaks:
+      enabled: true
+    shellcheck:
+      enabled: true
+    actionlint:
+      enabled: true
+chat:
+  auto_reply: true
+  art: false

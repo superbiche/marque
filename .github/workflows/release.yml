@@ -16,33 +16,40 @@ permissions:
 
 jobs:
   create-release:
-    runs-on: marque-ci
+    runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
       version: ${{ steps.meta.outputs.version }}
     steps:
+      # Expressions reach the shell only through env, never inline in `run:`:
+      # a dispatch input or ref name is text, not code.
       - name: Resolve tag
         id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
+          TAG="${INPUT_TAG:-$REF_NAME}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       # Intentionally no ref: read CHANGELOG from the triggering ref, so a
       # retroactive workflow_dispatch from main picks up notes added post-tag.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Extract changelog
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          VERSION="${{ steps.meta.outputs.version }}"
-          BODY=$(awk "/^## \\[${VERSION}\\]/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md)
+          # VERSION is awk data (-v), never part of the program text.
+          BODY=$(awk -v version="$VERSION" 'index($0, "## [" version "]") == 1 {found=1; next} /^## /{if(found) exit} found{print}' CHANGELOG.md)
           echo "$BODY" > release_notes.md
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
-          TAG="${{ steps.meta.outputs.tag }}"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "release $TAG already exists, skipping create"
           elif [ -s release_notes.md ]; then
@@ -53,15 +60,14 @@ jobs:
               --title "Marque $TAG" --generate-notes
           fi
 
-  # Deliberately GitHub-hosted: the published deb/rpm/AppImage link against
-  # the build host's glibc, and ubuntu-22.04 keeps the floor at 2.35. The
-  # marque-ci runner image is Ubuntu 24.04 (glibc 2.39), which would drop
-  # 22.04/Debian 12 users. Runs only on a tag push or a manual dispatch.
+  # ubuntu-22.04 on purpose: the published deb/rpm/AppImage link against the
+  # build host's glibc, and 22.04 keeps the floor at 2.35 so Ubuntu 22.04 and
+  # Debian 12 users stay supported. Runs only on a tag push or a manual dispatch.
   build-linux:
     needs: [create-release]
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.create-release.outputs.tag }}
 
@@ -77,18 +83,20 @@ jobs:
             xdg-utils
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src-tauri
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: lts/*
           cache: pnpm
@@ -102,9 +110,8 @@ jobs:
       - name: Upload bundles to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag }}"
-          VERSION="${{ needs.create-release.outputs.version }}"
           for pattern in "deb/*.deb" "rpm/*.rpm" "appimage/*.AppImage"; do
             for artifact in src-tauri/target/release/bundle/${pattern}; do
               [ -e "$artifact" ] || continue

@@ -14,6 +14,12 @@ export default defineConfig(async () => ({
     environment: "happy-dom",
     globals: false,
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
+    setupFiles: ["src/test/setup.ts"],
+    // Node >= 25 ships a built-in `localStorage` (undefined without
+    // --localstorage-file). Vitest skips globals that already exist, so
+    // happy-dom's Storage never lands on globalThis and tests touching
+    // localStorage fail. Disable Node's Web Storage in the worker processes.
+    execArgv: ["--no-experimental-webstorage"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
