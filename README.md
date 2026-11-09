@@ -39,20 +39,41 @@ Hard fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV, Apache-2.0.
 
 ## About The Project
 
-Marque is a desktop markdown viewer designed for one thing: opening `.md` files from the terminal and getting beautiful, instant rendering. Launch it with `marque FILENAME` to view a file or `marque FOLDER` to open a folder as a persistent workspace (Obsidian-style). Files reload live as they change on disk — perfect for viewing Claude-generated plans, documentation, or notes as they're being written.
+Marque is a desktop markdown viewer designed for one thing: opening `.md` files from the terminal and getting beautiful, instant rendering. Launch it with `marque FILENAME` to view a file or `marque FOLDER` to open a folder as a persistent workspace (Obsidian-style). Files reload live as they change on disk, which makes it a good companion for plans and notes written by coding agents while they are being written.
+
+Marque started as a hard fork of [marky](https://github.com/GRVYDEV/marky) because the upstream AppImage crashed on Fedora / KDE / Wayland. It is now maintained independently, Linux-first, with its own feature set.
 
 ### Features
 
-- **CLI-first** — `marque README.md` opens a window. `marque ./docs/` opens a folder.
-- **Live reload** — edits on disk (from your editor, Claude, etc.) update the view instantly.
-- **Folders** — add folders as persistent workspaces (Obsidian-style). They appear in a sidebar and restore on launch.
-- **Cmd+K command palette** — fuzzy-search files across all open folders, powered by [nucleo](https://github.com/helix-editor/nucleo).
-- **Syntax highlighting** — [Shiki](https://shiki.style) with VS Code themes for accurate, beautiful code blocks.
-- **Mermaid diagrams** — fenced `mermaid` blocks render as SVG.
-- **GFM** — tables, task lists, strikethrough, autolinks, footnotes.
-- **Light & dark themes** — follows system preference or toggle manually.
-- **Sanitized rendering** — all HTML is run through DOMPurify. Safe to view untrusted markdown.
-- **Small & fast** — native webview, no Electron.
+Viewing
+
+- **CLI-first** — `marque README.md` opens a window; `marque ./docs/` opens a folder; `marque` alone restores the last session. A second invocation reuses the running window.
+- **Live reload** — edits on disk (from your editor, an agent, a build) update the view instantly.
+- **Tabs and split panes** — open several documents, split the active pane vertically or horizontally, drop a file onto the window to open it.
+- **Document links** — relative and absolute links to other markdown files open in a tab (with `#heading` scroll), in-page anchors scroll, external URLs open in the system browser.
+- **On this page** — a table of contents of the open document; sidebars are resizable.
+- **Find in document** — ⌘F searches inside the open document.
+- **Content zoom, width and fonts** — zoom the rendered content independently of the UI (70–200 %), choose Narrow / Wide / Full width, and pick the reading font (Geist, Inter, iA Writer Quattro, Literata, or System).
+- **Print** — ⌘P prints the open document with a paper-friendly stylesheet.
+- **Copy** — copy the document's markdown source, or copy exactly what you selected.
+- **Light & dark themes** — follow the system or toggle; a warm, low-glare dark palette.
+
+Workspaces
+
+- **Folders** — add folders as persistent workspaces; they appear in a sidebar and restore on launch. Marque never writes inside them.
+- **⌘K command palette** — fuzzy-search files across all open folders, powered by [nucleo](https://github.com/helix-editor/nucleo), instant even on large trees.
+- **Pinned files** — pin any file to its own section above the folders, independent of workspaces.
+- **Sidebar that remembers** — expanded directories are restored across sessions; collapse-all per folder; `.gitignore` and the usual build directories are respected.
+- **Drag out, reveal** — drag a file from the sidebar or a tab into any drop target; open a file's location in the system file manager.
+- **Native dialogs** — file and folder pickers go through the XDG desktop portal, so KDE and other non-GNOME desktops get their own dialog.
+
+Rendering
+
+- **Syntax highlighting** — [Shiki](https://shiki.style) with VS Code themes, loaded on demand.
+- **Mermaid diagrams** — fenced `mermaid` blocks render as SVG, in both themes.
+- **GFM** — tables, task lists, strikethrough, autolinks, footnotes; YAML front matter is stripped.
+- **Sanitized rendering** — all HTML goes through DOMPurify; safe to view untrusted markdown.
+- **Fast** — cold launch under two seconds with large folders registered; file watching is ignore-aware, non-recursive and capped per folder, so the UI never stalls on a rebuild. Native webview, no Electron.
 
 ## Install
 
@@ -107,12 +128,18 @@ marque
 
 ## Keyboard Shortcuts
 
-| Shortcut      | Action                              |
-| ------------- | ------------------------------------ |
-| `Cmd+K`       | Command palette (fuzzy file search) |
-| `Cmd+O`       | Open file                           |
-| `Cmd+Shift+O` | Add folder                          |
-| `Cmd+F`       | Search in page                      |
+`⌘` is `Ctrl` on Linux.
+
+| Shortcut              | Action                                   |
+| --------------------- | ---------------------------------------- |
+| `⌘K`                  | Command palette (fuzzy file search)      |
+| `⌘O`                  | Open file                                |
+| `⌘F`                  | Find in document                         |
+| `⌘P`                  | Print                                    |
+| `⌘\`                  | Split the active pane vertically         |
+| `⌘⇧\`                 | Split the active pane horizontally       |
+| `⌘W`                  | Close the active tab                     |
+| `⌘+` / `⌘−` / `⌘0`    | Content zoom in / out / reset            |
 
 ## Development
 
