@@ -271,6 +271,7 @@ fn empty_tree(folder: &Folder) -> TreeNode {
         name: folder.name.clone(),
         path: folder.path.clone(),
         is_dir: true,
+        modified: 0,
         children: Vec::new(),
     }
 }

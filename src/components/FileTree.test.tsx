@@ -7,24 +7,27 @@ const tree: TreeNode = {
   name: "root",
   path: "/root",
   is_dir: true,
+  modified: 0,
   children: [
     {
       name: "docs",
       path: "/root/docs",
       is_dir: true,
+      modified: 0,
       children: [
         {
           name: "guides",
           path: "/root/docs/guides",
           is_dir: true,
+          modified: 0,
           children: [
-            { name: "deep.md", path: "/root/docs/guides/deep.md", is_dir: false, children: [] },
+            { name: "deep.md", path: "/root/docs/guides/deep.md", is_dir: false, modified: 0, children: [] },
           ],
         },
-        { name: "intro.md", path: "/root/docs/intro.md", is_dir: false, children: [] },
+        { name: "intro.md", path: "/root/docs/intro.md", is_dir: false, modified: 0, children: [] },
       ],
     },
-    { name: "README.md", path: "/root/README.md", is_dir: false, children: [] },
+    { name: "README.md", path: "/root/README.md", is_dir: false, modified: 0, children: [] },
   ],
 };
 

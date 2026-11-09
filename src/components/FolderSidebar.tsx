@@ -1,7 +1,8 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { tauri, onFolderChanged, type AnnotatedFolder, type TreeNode } from "@/lib/tauri";
 import { usePreferences } from "@/lib/preferences";
+import { sortTreeByModified } from "@/lib/fileTree";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -9,7 +10,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ClipboardCopy, Plus, X, ChevronDown, ChevronRight, ChevronsDownUp, FileText, FolderOpen, FolderTree, Pin, PinOff, Search, Layers, List } from "lucide-react";
+import { ClipboardCopy, Plus, X, ChevronDown, ChevronRight, ChevronsDownUp, FileText, FolderOpen, FolderTree, Pin, PinOff, Search, Layers, List, Clock, ArrowDownAZ } from "lucide-react";
 import { FileTreeNode } from "@/components/FileTree";
 import {
   ContextMenu,
@@ -82,7 +83,12 @@ export const FolderSidebar = memo(function FolderSidebar({
   const folderIdsRef = useRef(new Set<string>());
   const loadingTreeIdsRef = useRef(new Set<string>());
   const pendingForceIdsRef = useRef(new Set<string>());
-  const { sidebarGroupByRepo, setSidebarGroupByRepo } = usePreferences();
+  const {
+    sidebarGroupByRepo,
+    setSidebarGroupByRepo,
+    sidebarSortByModified,
+    setSidebarSortByModified,
+  } = usePreferences();
 
   const loadTree = useCallback(async (folderId: string, force = false) => {
     if (loadingTreeIdsRef.current.has(folderId)) {
@@ -153,6 +159,16 @@ export const FolderSidebar = memo(function FolderSidebar({
     };
   }, [loadTree]);
 
+  const sortedTrees = useMemo(
+    () =>
+      sidebarSortByModified
+        ? Object.fromEntries(
+            Object.entries(trees).map(([id, tree]) => [id, sortTreeByModified(tree)])
+          )
+        : trees,
+    [trees, sidebarSortByModified]
+  );
+
   const handleToggleDir = useCallback((absolutePath: string) => {
     setExpandedDirs((previous) => {
       const next = new Set(previous);
@@ -184,7 +200,7 @@ export const FolderSidebar = memo(function FolderSidebar({
   };
 
   const renderFolder = (f: AnnotatedFolder) => {
-    const tree = trees[f.id];
+    const tree = sortedTrees[f.id];
     const isCollapsed = collapsed[f.id];
     return (
       <div key={f.id} id={`folder-${f.id}`} className="group/folder mb-1">
@@ -342,6 +358,25 @@ export const FolderSidebar = memo(function FolderSidebar({
           Folders
         </div>
         <div className="flex items-center gap-0.5">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={() => setSidebarSortByModified(!sidebarSortByModified)}
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+              >
+                {sidebarSortByModified ? (
+                  <ArrowDownAZ className="h-3.5 w-3.5" />
+                ) : (
+                  <Clock className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {sidebarSortByModified ? "Sort by name" : "Sort by last modified"}
+            </TooltipContent>
+          </Tooltip>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
