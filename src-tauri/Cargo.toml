@@ -22,8 +22,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
 thiserror = "2"
-notify = "7"
-notify-debouncer-full = "0.4"
+notify = "8"
+notify-debouncer-full = "0.7"
 nucleo = "0.5"
 ignore = "0.4"
 uuid = { version = "1", features = ["v4", "serde"] }
