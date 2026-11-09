@@ -6,7 +6,7 @@
   <br>
 </h1>
 
-<h4 align="center">A fast, native markdown viewer for Linux and macOS built with <a href="https://v2.tauri.app">Tauri v2</a>, <a href="https://react.dev">React</a>, and <a href="https://github.com/markdown-it/markdown-it">markdown-it</a>. Beautiful rendering of tables, code blocks, task lists, math, and diagrams — with live reload.</h4>
+<h4 align="center">A fast, native markdown viewer for Linux built with <a href="https://v2.tauri.app">Tauri v2</a>, <a href="https://react.dev">React</a>, and <a href="https://github.com/markdown-it/markdown-it">markdown-it</a>. Beautiful rendering of tables, code blocks, task lists, footnotes, and Mermaid diagrams — with live reload.</h4>
 
 Hard fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV, Apache-2.0.
 
@@ -47,7 +47,6 @@ Marque is a desktop markdown viewer designed for one thing: opening `.md` files 
 - **Folders** — add folders as persistent workspaces (Obsidian-style). They appear in a sidebar and restore on launch.
 - **Cmd+K command palette** — fuzzy-search files across all open folders, powered by [nucleo](https://github.com/helix-editor/nucleo).
 - **Syntax highlighting** — [Shiki](https://shiki.style) with VS Code themes for accurate, beautiful code blocks.
-- **Math** — KaTeX rendering for `$inline$` and `$$display$$` math.
 - **Mermaid diagrams** — fenced `mermaid` blocks render as SVG.
 - **GFM** — tables, task lists, strikethrough, autolinks, footnotes.
 - **Light & dark themes** — follows system preference or toggle manually.
@@ -151,7 +150,6 @@ scripts/         Install helpers
 | Frontend            | React + TypeScript + Vite                                 |
 | Markdown            | [markdown-it](https://github.com/markdown-it/markdown-it) |
 | Syntax highlighting | [Shiki](https://shiki.style)                              |
-| Math                | [KaTeX](https://katex.org)                                |
 | Diagrams            | [Mermaid](https://mermaid.js.org)                         |
 | Fuzzy search        | [nucleo](https://github.com/helix-editor/nucleo)          |
 | UI primitives       | [shadcn/ui](https://ui.shadcn.com)                        |
