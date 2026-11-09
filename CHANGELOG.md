@@ -12,7 +12,7 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 
 ### Changed
 - The repository is public. CI and the release job run on GitHub-hosted runners; actions are pinned by commit SHA.
-- Dependencies: vitest 4 and happy-dom 21 (test tooling), plus in-range updates that clear every published npm advisory in the tree, including DOMPurify 3.4.17, markdown-it 14.3.3, and Mermaid 11.16.1.
+- The release workflow no longer interpolates workflow expressions (dispatch input, ref name, step outputs) into shell; they are passed through the environment.
 
 ### Added
 - Open-source project files: `CONTRIBUTING.md`, `SECURITY.md` with private vulnerability reporting, `CODE_OF_CONDUCT.md`, `NOTICE`, issue and pull request templates, Dependabot (npm, cargo, GitHub Actions) and a CodeRabbit review configuration.

@@ -58,7 +58,7 @@ Marque is a desktop markdown viewer designed for one thing: opening `.md` files 
 
 ### Packages (Linux x86_64)
 
-Every release ships a `.deb`, an `.rpm`, and an `.AppImage` on the [releases page](https://github.com/superbiche/marque/releases/latest). The packages are built on Ubuntu 22.04 (glibc 2.35) and run on Ubuntu 22.04+, Debian 12+, Fedora 40+, and comparable distributions. Marque is developed and tested on Fedora / KDE Plasma / Wayland.
+Every release ships a `.deb`, an `.rpm`, and an `.AppImage` on the [releases page](https://github.com/superbiche/marque/releases/latest). The packages are built on Ubuntu 22.04 (glibc 2.35), so any distribution with glibc 2.35 or newer is expected to work (Ubuntu 22.04+, Debian 12+, Fedora 40+). Marque is developed and tested on Fedora / KDE Plasma / Wayland; other distributions are not routinely tested.
 
 ```bash
 # Fedora
