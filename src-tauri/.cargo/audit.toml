@@ -1,0 +1,11 @@
+# cargo-audit configuration. Each ignore names a transitive advisory with no
+# fix available from the crate that pulls it in. Re-check on every bump of the
+# listed parent; remove the ignore once the parent moves past the patched
+# version (quick-xml >= 0.41).
+[advisories]
+ignore = [
+  # quick-xml 0.39.x via wayland-scanner (proc-macro, build time only) and
+  # quick-xml 0.38.x via plist, which tauri compiles only on non-Linux targets.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
+]
