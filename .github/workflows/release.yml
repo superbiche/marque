@@ -41,7 +41,8 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          BODY=$(awk "/^## \\[${VERSION}\\]/{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md)
+          # VERSION is awk data (-v), never part of the program text.
+          BODY=$(awk -v version="$VERSION" 'index($0, "## [" version "]") == 1 {found=1; next} /^## /{if(found) exit} found{print}' CHANGELOG.md)
           echo "$BODY" > release_notes.md
 
       - name: Create GitHub Release
