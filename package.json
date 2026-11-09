@@ -30,7 +30,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "dompurify": "^3.4.17",
-    "lucide-react": "^0.469.0",
+    "lucide-react": "^1.66.0",
     "markdown-it": "^14.3.3",
     "markdown-it-anchor": "^9.2.1",
     "markdown-it-footnote": "^4.0.0",
