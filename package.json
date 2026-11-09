@@ -31,7 +31,7 @@
     "cmdk": "^1.0.4",
     "dompurify": "^3.2.3",
     "lucide-react": "^0.469.0",
-    "markdown-it": "^14.1.0",
+    "markdown-it": "^14.3.3",
     "markdown-it-anchor": "^9.2.0",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-front-matter": "^0.2.4",
