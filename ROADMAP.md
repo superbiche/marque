@@ -12,6 +12,7 @@
 - `gap:` reveal-in-file-manager context action (drag-out shipped instead; opener plugin already bundled) — provenance: v0.4.0 slice choice.
 - `gap:` math rendering (`$inline$` / `$$display$$`) — KaTeX was dropped from the direct dependencies in the 2026-08-02 purge and no markdown-it math plugin replaced it; `$…$` renders as plain text. Candidate: `markdown-it-katex`-class plugin over the KaTeX copy Mermaid already bundles — provenance: 2026-11-09 open-source readiness render check.
 - `gap:` local images relative to the document (`![](diagram.png)`) do not load; only `data:` and remote images render. Needs the Tauri asset protocol scoped to the document directory (or `convertFileSrc` rewriting at render time) — provenance: marky#19, confirmed absent in marque 2026-11-09.
+- `gap:` a file opened on its own (CLI argument or ⌘O) outside every registered folder is not watched: `file://changed` is only emitted by folder watchers, so such a document never live-reloads. Candidate: a per-file (or parent-directory, non-recursive) watch for standalone tabs — provenance: 2026-11-09 notify 8 live-reload check.
 - Known upstream noise, no action: WebKitWebProcess SEGV during `exit()` teardown (GBM/EGL race, webkit2gtk 2.52.5 + Mesa 26.1.5) — coredumps on quit, harmless; fix arrives via Fedora webkit updates.
 
 Synthesized from the 2026-08 multi-agent audit (adversarially verified). Priorities follow the fork's goals: startup performance > stability > maintainability.
