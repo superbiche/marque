@@ -14,6 +14,7 @@ Hard fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV, Apache-2.0.
   <a href="https://github.com/superbiche/marque/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/superbiche/marque/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/superbiche/marque/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/superbiche/marque?sort=semver"></a>
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue.svg"></a>
+  <a href="https://coderabbit.ai"><img alt="CodeRabbit Pull Request Reviews" src="https://img.shields.io/coderabbit/prs/github/superbiche/marque?utm_source=oss&utm_medium=github&utm_campaign=superbiche%2Fmarque&labelColor=171717&color=FF570A&label=CodeRabbit+Reviews"></a>
 </p>
 
 <!-- TABLE OF CONTENTS -->
