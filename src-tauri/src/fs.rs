@@ -19,10 +19,10 @@ pub fn read_text<P: AsRef<Path>>(path: P) -> AppResult<String> {
 }
 
 /// The real location of an opened document: symlinks resolved and `..`
-/// segments collapsed. Falls back to the lexical path when the filesystem
-/// cannot resolve it (the read already succeeded, so this is rare).
-pub fn canonical_document_path(path: &str) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+/// segments collapsed. `None` when the filesystem cannot resolve it; the
+/// caller then grants nothing rather than trusting the lexical path.
+pub fn canonical_document_path(path: &str) -> Option<PathBuf> {
+    std::fs::canonicalize(path).ok()
 }
 
 /// Directory the asset protocol may serve so that images referenced by
@@ -66,7 +66,7 @@ mod tests {
         let dotdot = real.join("docs/../docs/guide.md");
         assert_eq!(
             canonical_document_path(dotdot.to_str().unwrap()),
-            real_canon.join("docs/guide.md")
+            Some(real_canon.join("docs/guide.md"))
         );
 
         #[cfg(unix)]
@@ -75,12 +75,12 @@ mod tests {
             std::os::unix::fs::symlink(&real, &link).unwrap();
             assert_eq!(
                 canonical_document_path(link.join("docs/guide.md").to_str().unwrap()),
-                real_canon.join("docs/guide.md")
+                Some(real_canon.join("docs/guide.md"))
             );
         }
 
         let missing = dir.path().join("missing/../nope.md");
-        assert_eq!(canonical_document_path(missing.to_str().unwrap()), missing);
+        assert_eq!(canonical_document_path(missing.to_str().unwrap()), None);
     }
 
     #[test]
@@ -102,6 +102,24 @@ mod tests {
     fn asset_scope_never_grants_the_filesystem_root() {
         assert_eq!(asset_scope_dir(Path::new("/plan.md"), None), None);
         assert_eq!(asset_scope_dir(Path::new("/plan.md"), Some(PathBuf::from("/"))), None);
+    }
+
+    /// A document reached through a symlink to `/` must not grant the root:
+    /// canonicalization lands the document at `/<name>`, whose parent is `/`.
+    #[cfg(unix)]
+    #[test]
+    fn asset_scope_rejects_a_document_reached_through_a_root_symlink() {
+        let dir = tempdir().unwrap();
+        let rootlink = dir.path().join("rootlink");
+        std::os::unix::fs::symlink("/", &rootlink).unwrap();
+        // `/proc/version` exists on Linux and lives directly under `/`.
+        let lexical = rootlink.join("proc/version");
+        let document = canonical_document_path(lexical.to_str().unwrap()).unwrap();
+        assert_eq!(document, PathBuf::from("/proc/version"));
+        // `/proc` is a real directory: granted, bounded, not `/`.
+        assert_eq!(asset_scope_dir(&document, None), Some(PathBuf::from("/proc")));
+        // A file directly under `/` would have `/` as its directory: refused.
+        assert_eq!(asset_scope_dir(Path::new("/guide.md"), None), None);
     }
 
     #[test]
