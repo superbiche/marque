@@ -18,6 +18,13 @@ pub fn read_text<P: AsRef<Path>>(path: P) -> AppResult<String> {
     String::from_utf8(bytes).map_err(|_| AppError::Invalid("file is not valid UTF-8".into()))
 }
 
+/// The real location of an opened document: symlinks resolved and `..`
+/// segments collapsed. Falls back to the lexical path when the filesystem
+/// cannot resolve it (the read already succeeded, so this is rare).
+pub fn canonical_document_path(path: &str) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| PathBuf::from(path))
+}
+
 /// Directory the asset protocol may serve so that images referenced by
 /// `document` load: the registered folder that contains it when there is one
 /// (so `../` references within the workspace work), otherwise the document's
@@ -47,6 +54,34 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn canonical_document_path_resolves_dotdot_and_symlinks() {
+        let dir = tempdir().unwrap();
+        let real = dir.path().join("real");
+        fs::create_dir_all(real.join("docs")).unwrap();
+        fs::write(real.join("docs/guide.md"), "x").unwrap();
+        let real_canon = real.canonicalize().unwrap();
+
+        let dotdot = real.join("docs/../docs/guide.md");
+        assert_eq!(
+            canonical_document_path(dotdot.to_str().unwrap()),
+            real_canon.join("docs/guide.md")
+        );
+
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            assert_eq!(
+                canonical_document_path(link.join("docs/guide.md").to_str().unwrap()),
+                real_canon.join("docs/guide.md")
+            );
+        }
+
+        let missing = dir.path().join("missing/../nope.md");
+        assert_eq!(canonical_document_path(missing.to_str().unwrap()), missing);
+    }
 
     #[test]
     fn asset_scope_prefers_the_registered_folder_root() {

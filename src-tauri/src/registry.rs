@@ -84,15 +84,23 @@ impl FolderRegistry {
     }
 
     /// Root of the registered folder that contains `path`, if any (the
-    /// deepest one when folders nest).
+    /// deepest one when folders nest). `path` is expected canonical (see
+    /// `fs::canonical_document_path`); roots are compared both as stored and
+    /// in canonical form, and the canonical root is returned so the asset
+    /// scope matches what the protocol canonicalizes at request time.
     pub fn folder_root_containing(&self, path: &Path) -> Option<PathBuf> {
         self.inner
             .read()
             .settings
             .folders
             .iter()
-            .map(|folder| PathBuf::from(&folder.path))
-            .filter(|root| path.starts_with(root))
+            .map(|folder| {
+                let stored = PathBuf::from(&folder.path);
+                let canonical = std::fs::canonicalize(&stored).unwrap_or_else(|_| stored.clone());
+                (stored, canonical)
+            })
+            .filter(|(stored, canonical)| path.starts_with(canonical) || path.starts_with(stored))
+            .map(|(_, canonical)| canonical)
             .max_by_key(|root| root.as_os_str().len())
     }
 
@@ -326,6 +334,37 @@ mod tests {
         );
         assert_eq!(registry.folder_root_containing(Path::new("/home/u/repository/x.md")), None);
         assert_eq!(registry.folder_root_containing(Path::new("/tmp/plan.md")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_root_containing_matches_a_symlinked_registration_by_its_real_path() {
+        let dir = tempdir().unwrap();
+        let real = dir.path().join("real");
+        fs::create_dir_all(real.join("docs")).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let real_canon = real.canonicalize().unwrap();
+
+        // Registered through the symlink; the document arrives canonical.
+        let registry = FolderRegistry::from_settings(Settings {
+            folders: vec![Folder {
+                id: "f".into(),
+                name: "f".into(),
+                path: link.to_string_lossy().into_owned(),
+                added_at: "now".into(),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(
+            registry.folder_root_containing(&real_canon.join("docs/guide.md")),
+            Some(real_canon.clone())
+        );
+        // A lexical path through the link still matches and yields the real root.
+        assert_eq!(
+            registry.folder_root_containing(&link.join("docs/guide.md")),
+            Some(real_canon)
+        );
     }
 
     #[test]

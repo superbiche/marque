@@ -30,9 +30,11 @@ pub fn read_file(
     registry: State<'_, SharedRegistry>,
 ) -> AppResult<String> {
     let contents = crate::fs::read_text(&path)?;
-    let document = std::path::Path::new(&path);
-    let folder_root = registry.folder_root_containing(document);
-    if let Err(error) = crate::fs::grant_asset_scope(&app, document, folder_root) {
+    // Resolve symlinks and `..` before choosing what the asset protocol may
+    // serve, so the grant lands on the document's real directory.
+    let document = crate::fs::canonical_document_path(&path);
+    let folder_root = registry.folder_root_containing(&document);
+    if let Err(error) = crate::fs::grant_asset_scope(&app, &document, folder_root) {
         // Images next to the document will not load; the document itself still renders.
         eprintln!("marque: {error}");
     }
