@@ -19,7 +19,7 @@ Live project state is NOT in this file: `ROADMAP.md` carries the wanted-later le
 - **Shiki** — syntax highlighting (not highlight.js, not Prism)
 - **shadcn/ui** — UI component primitives (Radix-based, copied into `src/components/ui/`)
 - **Tailwind CSS** — styling
-- **KaTeX** for math (via mermaid's bundled copy), **mermaid** for diagrams
+- **mermaid** for diagrams (it bundles KaTeX for its own labels; markdown math is not rendered yet, see `ROADMAP.md`)
 - **nucleo** (Rust) — fuzzy matcher for Cmd+K file search
 - **cmdk** via shadcn `<Command />` — command palette UI
 - **notify** (Rust) — file watching per folder

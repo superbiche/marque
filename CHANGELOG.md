@@ -13,7 +13,7 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 ### Changed
 - The repository is public. CI and the release job run on GitHub-hosted runners; actions are pinned by commit SHA.
 - The release workflow no longer interpolates workflow expressions (dispatch input, ref name, step outputs) into shell; they are passed through the environment.
-- Dependencies: every published npm advisory in the tree is cleared except one low-severity KaTeX item pinned by Mermaid. DOMPurify 3.4.17, markdown-it 14.3.3, Mermaid 11.17.2, Vite 7.3.7, and vitest 4 / happy-dom 21 for the test suite.
+- Dependencies: `pnpm audit` reports no known vulnerability and `cargo audit` is clean (two documented transitive ignores). Runtime: DOMPurify 3.4.17, markdown-it 15 with markdown-it-anchor 10, Mermaid 12, lucide-react 1.x, tailwind-merge 3, Vite 7.3.7; Rust: tauri 2.12.5 with its build/plugin family, notify 8 with notify-debouncer-full 0.7 (drops the unmaintained `instant` crate); tooling: TypeScript 7, vitest 5, happy-dom 21.
 
 ### Added
 - Open-source project files: `CONTRIBUTING.md`, `SECURITY.md` with private vulnerability reporting, `CODE_OF_CONDUCT.md`, `NOTICE`, issue and pull request templates, Dependabot (npm, cargo, GitHub Actions) and a CodeRabbit review configuration.
