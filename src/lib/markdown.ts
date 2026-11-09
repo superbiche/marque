@@ -35,7 +35,10 @@ md.use(anchor, {
   }),
   slugify: slugifyHeading,
 });
-md.use(footnote);
+// @types/markdown-it-footnote types the plugin against the CommonJS copy of
+// @types/markdown-it (14.2.0 ships ESM and CJS declaration trees that TS
+// treats as different types). Same runtime object; align the type.
+md.use(footnote as unknown as Parameters<typeof md.use>[0]);
 md.use(taskLists, { enabled: true, label: false });
 
 // Strip YAML front matter so files written for static-site generators,
