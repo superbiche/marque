@@ -10,6 +10,7 @@ export interface Preferences {
   sidebarLeftWidth: number;
   sidebarRightWidth: number;
   sidebarGroupByRepo: boolean;
+  sidebarSortByModified: boolean;
 }
 
 export type ContentWidth = "narrow" | "wide" | "full";
@@ -43,6 +44,7 @@ const DEFAULTS: Preferences = {
   sidebarLeftWidth: 256,
   sidebarRightWidth: 224,
   sidebarGroupByRepo: true,
+  sidebarSortByModified: false,
 };
 
 export const UI_ZOOM_MIN = 0.7;
@@ -62,6 +64,7 @@ export const SIDEBAR_RIGHT_DEFAULT = 224;
 interface Ctx extends Preferences {
   setCopyAsMarkdown: (v: boolean) => void;
   setSidebarGroupByRepo: (v: boolean) => void;
+  setSidebarSortByModified: (v: boolean) => void;
   zoomIn: () => void;
   zoomOut: () => void;
   zoomReset: () => void;
@@ -117,6 +120,7 @@ function persistToBackend(prefs: Preferences) {
       sidebar_right_width: prefs.sidebarRightWidth,
       copy_as_markdown: prefs.copyAsMarkdown,
       sidebar_group_by_repo: prefs.sidebarGroupByRepo,
+      sidebar_sort_by_modified: prefs.sidebarSortByModified,
     }).catch(() => {});
   }, 300);
 }
@@ -153,6 +157,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
         if (backend.sidebar_right_width != null) next.sidebarRightWidth = backend.sidebar_right_width;
         if (backend.copy_as_markdown != null) next.copyAsMarkdown = backend.copy_as_markdown;
         if (backend.sidebar_group_by_repo != null) next.sidebarGroupByRepo = backend.sidebar_group_by_repo;
+        if (backend.sidebar_sort_by_modified != null) next.sidebarSortByModified = backend.sidebar_sort_by_modified;
         persist(next);
         return next;
       });
@@ -191,6 +196,11 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
 
   const setSidebarGroupByRepo = React.useCallback(
     (v: boolean) => update((p) => ({ ...p, sidebarGroupByRepo: v })),
+    [update],
+  );
+
+  const setSidebarSortByModified = React.useCallback(
+    (v: boolean) => update((p) => ({ ...p, sidebarSortByModified: v })),
     [update],
   );
 
@@ -259,6 +269,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       ...prefs,
       setCopyAsMarkdown,
       setSidebarGroupByRepo,
+      setSidebarSortByModified,
       zoomIn,
       zoomOut,
       zoomReset,
@@ -270,7 +281,7 @@ export function PreferencesProvider({ children }: { children: React.ReactNode })
       setSidebarWidth,
       resetSidebarWidth,
     }),
-    [prefs, setCopyAsMarkdown, setSidebarGroupByRepo, zoomIn, zoomOut, zoomReset, contentZoomIn, contentZoomOut, contentZoomReset, setContentWidth, setContentFont, setSidebarWidth, resetSidebarWidth],
+    [prefs, setCopyAsMarkdown, setSidebarGroupByRepo, setSidebarSortByModified, zoomIn, zoomOut, zoomReset, contentZoomIn, contentZoomOut, contentZoomReset, setContentWidth, setContentFont, setSidebarWidth, resetSidebarWidth],
   );
 
   return (

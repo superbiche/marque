@@ -65,6 +65,7 @@ Workspaces
 - **⌘K command palette** — fuzzy-search files across all open folders, powered by [nucleo](https://github.com/helix-editor/nucleo), instant even on large trees.
 - **Pinned files** — pin any file to its own section above the folders, independent of workspaces.
 - **Sidebar that remembers** — expanded directories are restored across sessions; collapse-all per folder; `.gitignore` and the usual build directories are respected.
+- **Sort by last modified** — a toggle in the folder sidebar header orders each tree newest first (directories still before files); the choice persists across sessions.
 - **Drag out, reveal** — drag a file from the sidebar or a tab into any drop target; open a file's location in the system file manager.
 - **Native dialogs** — file and folder pickers go through the XDG desktop portal, so KDE and other non-GNOME desktops get their own dialog.
 

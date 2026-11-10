@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_IGNORES: &[&str] = &[
     ".git",
@@ -24,6 +25,9 @@ pub struct TreeNode {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    /// Last modified time in ms since epoch. For directories, the newest descendant.
+    #[serde(default)]
+    pub modified: u64,
     #[serde(default)]
     pub children: Vec<TreeNode>,
 }
@@ -89,7 +93,7 @@ pub fn build_tree(root: &Path) -> AppResult<TreeNode> {
     Ok(build_tree_from_files(root, files))
 }
 
-fn collect_markdown_files_parallel(root: &Path) -> Vec<PathBuf> {
+fn collect_markdown_files_parallel(root: &Path) -> Vec<(PathBuf, u64)> {
     let (sender, receiver) = mpsc::channel();
     folder_walk_builder(root).build_parallel().run(|| {
         let sender = sender.clone();
@@ -97,7 +101,7 @@ fn collect_markdown_files_parallel(root: &Path) -> Vec<PathBuf> {
             if let Ok(entry) = entry {
                 let path = entry.path();
                 if path.is_file() && is_markdown(path) {
-                    let _ = sender.send(path.to_path_buf());
+                    let _ = sender.send((path.to_path_buf(), file_modified(path)));
                 }
             }
             WalkState::Continue
@@ -116,14 +120,15 @@ fn build_tree_serial(root: &Path) -> TreeNode {
         .flatten()
         .filter_map(|entry| {
             let path = entry.path();
-            (path.is_file() && is_markdown(path)).then(|| path.to_path_buf())
+            (path.is_file() && is_markdown(path))
+                .then(|| (path.to_path_buf(), file_modified(path)))
         })
         .collect::<Vec<_>>();
     files.sort();
     build_tree_from_files(root, files)
 }
 
-fn build_tree_from_files(root: &Path, files: Vec<PathBuf>) -> TreeNode {
+fn build_tree_from_files(root: &Path, files: Vec<(PathBuf, u64)>) -> TreeNode {
     let root_name = root
         .file_name()
         .and_then(|n| n.to_str())
@@ -132,12 +137,12 @@ fn build_tree_from_files(root: &Path, files: Vec<PathBuf>) -> TreeNode {
 
     let mut root_map = TreeMap::default();
 
-    for f in files {
+    for (f, modified) in files {
         let rel = match f.strip_prefix(root) {
             Ok(r) => r,
             Err(_) => continue,
         };
-        insert_path(&mut root_map, rel);
+        insert_path(&mut root_map, rel, modified);
     }
 
     let mut root_node = into_tree_node(root_name, root.to_path_buf(), true, root_map);
@@ -148,32 +153,64 @@ fn build_tree_from_files(root: &Path, files: Vec<PathBuf>) -> TreeNode {
 #[derive(Default)]
 struct TreeMap {
     children: BTreeMap<String, TreeMap>,
+    /// The file's own mtime for leaf (file) nodes. Directories always keep
+    /// 0 here; their `TreeNode` timestamp is the newest descendant, computed
+    /// during conversion.
+    modified: u64,
 }
 
-fn insert_path(node: &mut TreeMap, rel: &Path) {
+fn insert_path(node: &mut TreeMap, rel: &Path, modified: u64) {
+    if rel.as_os_str().is_empty() {
+        return;
+    }
     let mut current = node;
     for component in rel.components() {
         let name = component.as_os_str().to_string_lossy().into_owned();
         current = current.children.entry(name).or_default();
     }
+    current.modified = modified;
 }
 
 fn into_tree_node(name: String, path: PathBuf, is_dir: bool, tree: TreeMap) -> TreeNode {
-    let children = tree
-        .children
-        .into_iter()
-        .map(|(name, tree)| {
-            let path = path.join(&name);
-            let is_dir = !tree.children.is_empty();
-            into_tree_node(name, path, is_dir, tree)
-        })
-        .collect();
+    let mut children = Vec::with_capacity(tree.children.len());
+    let mut newest = tree.modified;
+    for (name, subtree) in tree.children {
+        let child_path = path.join(&name);
+        let child = into_tree_node(
+            name,
+            child_path,
+            !subtree.children.is_empty(),
+            subtree,
+        );
+        if child.modified > newest {
+            newest = child.modified;
+        }
+        children.push(child);
+    }
     TreeNode {
         name,
         path: path.to_string_lossy().into_owned(),
         is_dir,
+        modified: newest,
         children,
     }
+}
+
+/// A file's last-modified time in ms since the Unix epoch. Uses
+/// `std::fs::metadata`, which follows symlinks: a linked `.md` file reports
+/// its target's mtime.
+fn file_modified(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(to_epoch_ms)
+        .unwrap_or(0)
+}
+
+fn to_epoch_ms(t: SystemTime) -> u64 {
+    t.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn sort_tree(node: &mut TreeNode) {
@@ -295,6 +332,50 @@ mod tests {
         assert!(tree.children[0].is_dir);
         assert_eq!(tree.children[0].name, "a_dir");
         assert_eq!(tree.children[1].name, "z_root.md");
+    }
+
+    fn set_mtime(p: &Path, ms: u64) {
+        let f = fs::File::options().write(true).open(p).unwrap();
+        let times =
+            fs::FileTimes::new().set_modified(UNIX_EPOCH + std::time::Duration::from_millis(ms));
+        f.set_times(times).unwrap();
+    }
+
+    #[test]
+    fn tree_records_modified_and_dirs_use_newest_descendant() {
+        let dir = tempdir().unwrap();
+        let old = dir.path().join("sub/old.md");
+        let new = dir.path().join("sub/deep/new.md");
+        let root_file = dir.path().join("root.md");
+        touch(&old);
+        touch(&new);
+        touch(&root_file);
+        set_mtime(&old, 1_000_000);
+        set_mtime(&new, 3_000_000);
+        set_mtime(&root_file, 2_000_000);
+
+        let tree = build_tree(dir.path()).unwrap();
+        let sub = tree.children.iter().find(|c| c.name == "sub").unwrap();
+        let deep = sub.children.iter().find(|c| c.name == "deep").unwrap();
+        let root_md = tree.children.iter().find(|c| c.name == "root.md").unwrap();
+        assert_eq!(root_md.modified, 2_000_000);
+        assert_eq!(deep.modified, 3_000_000);
+        assert_eq!(sub.modified, 3_000_000);
+        assert_eq!(tree.modified, 3_000_000);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tree_uses_symlink_target_modified() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("elsewhere/target.md");
+        touch(&target);
+        set_mtime(&target, 5_000_000);
+        std::os::unix::fs::symlink(&target, dir.path().join("link.md")).unwrap();
+
+        let tree = build_tree(dir.path()).unwrap();
+        let link = tree.children.iter().find(|c| c.name == "link.md").unwrap();
+        assert_eq!(link.modified, 5_000_000);
     }
 
     #[test]

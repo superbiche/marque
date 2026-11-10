@@ -40,6 +40,8 @@ pub struct Settings {
     pub copy_as_markdown: Option<bool>,
     #[serde(default)]
     pub sidebar_group_by_repo: Option<bool>,
+    #[serde(default)]
+    pub sidebar_sort_by_modified: Option<bool>,
     /// Files pinned to the sidebar, in display order.
     #[serde(default)]
     pub pinned_files: Vec<String>,
