@@ -4,6 +4,7 @@ import footnote from "markdown-it-footnote";
 import taskLists from "markdown-it-task-lists";
 import frontMatter from "markdown-it-front-matter";
 import DOMPurify from "dompurify";
+import { resolveLocalImagePath } from "./images";
 
 export interface ParsedHeading {
   level: number;
@@ -97,12 +98,48 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return defaultLink(tokens, idx, options, env, self);
 };
 
-export function renderMarkdown(source: string): string {
+export interface RenderOptions {
+  /** Absolute path of the document being rendered; relative image sources resolve against its directory. */
+  documentPath?: string;
+  /**
+   * Maps an absolute local path to a URL the webview may load (the Tauri
+   * asset protocol). Returning `null` leaves the original source untouched.
+   */
+  toAssetUrl?: (absolutePath: string) => string | null;
+}
+
+// Options of the render in progress, read by the DOMPurify hook below.
+// DOMPurify hooks are synchronous and the instance is shared, so a module
+// variable scoped to the sanitize() call is the simplest way to pass context.
+let activeRender: RenderOptions | null = null;
+
+// Rewrite local image sources (markdown images and raw <img> alike) to asset
+// URLs the webview can load. Only URLs our resolver produced bypass
+// DOMPurify's URI check (forceKeepAttr skips the re-set, so the node is
+// updated here); an `asset:` URL written by the document itself does not
+// resolve (foreign scheme) and is dropped by the regular URI check.
+DOMPurify.addHook("uponSanitizeAttribute", (node, data) => {
+  if (!activeRender?.toAssetUrl || data.attrName !== "src" || node.nodeName !== "IMG") return;
+  const absolute = resolveLocalImagePath(data.attrValue, activeRender.documentPath);
+  if (!absolute) return;
+  const url = activeRender.toAssetUrl(absolute);
+  if (!url) return;
+  (node as Element).setAttribute("src", url);
+  data.attrValue = url;
+  data.forceKeepAttr = true;
+});
+
+export function renderMarkdown(source: string, options: RenderOptions = {}): string {
   const html = md.render(source);
-  return DOMPurify.sanitize(html, {
-    ADD_ATTR: ["target", "class", "id", "aria-hidden", "data-source-map"],
-    ADD_TAGS: ["section"],
-  });
+  activeRender = options;
+  try {
+    return DOMPurify.sanitize(html, {
+      ADD_ATTR: ["target", "class", "id", "aria-hidden", "data-source-map"],
+      ADD_TAGS: ["section"],
+    });
+  } finally {
+    activeRender = null;
+  }
 }
 
 export function extractHeadings(source: string): ParsedHeading[] {

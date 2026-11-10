@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export type InitialTarget =
@@ -95,4 +95,15 @@ export function onCliTarget(cb: (t: InitialTarget) => void): Promise<UnlistenFn>
 
 export function onFolderWatchLimit(cb: (limit: WatchLimit) => void): Promise<UnlistenFn> {
   return listen<WatchLimit>("folder://watch-limit", (e) => cb(e.payload));
+}
+
+/**
+ * URL the webview may load for a local file, through the Tauri asset protocol.
+ * The backend extends the protocol scope when a document is opened
+ * (`read_file`), so only files next to an opened document resolve. Returns
+ * `null` outside the Tauri runtime (tests, plain browsers).
+ */
+export function toAssetUrl(absolutePath: string): string | null {
+  if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return null;
+  return convertFileSrc(absolutePath);
 }

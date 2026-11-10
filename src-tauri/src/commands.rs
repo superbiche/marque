@@ -24,8 +24,24 @@ pub fn set_initial_target(target: InitialTarget, state: State<'_, InitialTargetS
 }
 
 #[tauri::command]
-pub fn read_file(path: String, registry: State<'_, SharedRegistry>) -> AppResult<String> {
+pub fn read_file(
+    app: AppHandle,
+    path: String,
+    registry: State<'_, SharedRegistry>,
+) -> AppResult<String> {
     let contents = crate::fs::read_text(&path)?;
+    // Resolve symlinks and `..` before choosing what the asset protocol may
+    // serve, so the grant lands on the document's real directory. If the path
+    // cannot be resolved, grant nothing: the document still renders, its
+    // local images do not.
+    if let Some(document) = crate::fs::canonical_document_path(&path) {
+        let folder_root = registry.folder_root_containing(&document);
+        if let Err(error) = crate::fs::grant_asset_scope(&app, &document, folder_root) {
+            eprintln!("marque: {error}");
+        }
+    } else {
+        eprintln!("marque: could not resolve {path}; local images will not load");
+    }
     registry.push_recent(path);
     Arc::clone(&*registry).persist_async(settings_dir());
     Ok(contents)

@@ -83,6 +83,27 @@ impl FolderRegistry {
             .any(|folder| folder.id == folder_id)
     }
 
+    /// Root of the registered folder that contains `path`, if any (the
+    /// deepest one when folders nest). `path` is expected canonical (see
+    /// `fs::canonical_document_path`); roots are compared both as stored and
+    /// in canonical form, and the canonical root is returned so the asset
+    /// scope matches what the protocol canonicalizes at request time.
+    pub fn folder_root_containing(&self, path: &Path) -> Option<PathBuf> {
+        self.inner
+            .read()
+            .settings
+            .folders
+            .iter()
+            .map(|folder| {
+                let stored = PathBuf::from(&folder.path);
+                let canonical = std::fs::canonicalize(&stored).unwrap_or_else(|_| stored.clone());
+                (stored, canonical)
+            })
+            .filter(|(stored, canonical)| path.starts_with(canonical) || path.starts_with(stored))
+            .map(|(_, canonical)| canonical)
+            .max_by_key(|root| root.as_os_str().len())
+    }
+
     pub fn tree_or_empty(&self, folder_id: &str) -> Option<TreeNode> {
         let inner = self.inner.read();
         if let Some(tree) = inner.trees.get(folder_id) {
@@ -288,6 +309,62 @@ mod tests {
         assert!(registry.index_snapshot().is_empty());
         assert_eq!(registry.tree_or_empty("f1").unwrap().children.len(), 0);
         assert!(registry.tree_or_empty("missing").is_none());
+    }
+
+    #[test]
+    fn folder_root_containing_picks_the_deepest_registered_folder() {
+        let folder = |id: &str, path: &str| Folder {
+            id: id.into(),
+            name: id.into(),
+            path: path.into(),
+            added_at: "now".into(),
+        };
+        let registry = FolderRegistry::from_settings(Settings {
+            folders: vec![folder("outer", "/home/u/repo"), folder("inner", "/home/u/repo/docs")],
+            ..Default::default()
+        });
+
+        assert_eq!(
+            registry.folder_root_containing(Path::new("/home/u/repo/docs/guide.md")),
+            Some(PathBuf::from("/home/u/repo/docs"))
+        );
+        assert_eq!(
+            registry.folder_root_containing(Path::new("/home/u/repo/README.md")),
+            Some(PathBuf::from("/home/u/repo"))
+        );
+        assert_eq!(registry.folder_root_containing(Path::new("/home/u/repository/x.md")), None);
+        assert_eq!(registry.folder_root_containing(Path::new("/tmp/plan.md")), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn folder_root_containing_matches_a_symlinked_registration_by_its_real_path() {
+        let dir = tempdir().unwrap();
+        let real = dir.path().join("real");
+        fs::create_dir_all(real.join("docs")).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let real_canon = real.canonicalize().unwrap();
+
+        // Registered through the symlink; the document arrives canonical.
+        let registry = FolderRegistry::from_settings(Settings {
+            folders: vec![Folder {
+                id: "f".into(),
+                name: "f".into(),
+                path: link.to_string_lossy().into_owned(),
+                added_at: "now".into(),
+            }],
+            ..Default::default()
+        });
+        assert_eq!(
+            registry.folder_root_containing(&real_canon.join("docs/guide.md")),
+            Some(real_canon.clone())
+        );
+        // A lexical path through the link still matches and yields the real root.
+        assert_eq!(
+            registry.folder_root_containing(&link.join("docs/guide.md")),
+            Some(real_canon)
+        );
     }
 
     #[test]

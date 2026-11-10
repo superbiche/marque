@@ -9,6 +9,7 @@ import { classifyLink } from "@/lib/links";
 import { useTheme } from "@/lib/theme";
 import { usePreferences } from "@/lib/preferences";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { toAssetUrl } from "@/lib/tauri";
 
 interface Props {
   source: string;
@@ -62,10 +63,10 @@ export const Viewer = React.memo(function Viewer({
     const cachedHtml = renderCache.get(cacheKey);
     setRenderState({
       key: cacheKey,
-      html: cachedHtml ?? renderMarkdown(source),
+      html: cachedHtml ?? renderMarkdown(source, { documentPath: filePath, toAssetUrl }),
       isProcessed: cachedHtml !== undefined,
     });
-  }, [cacheKey, source]);
+  }, [cacheKey, source, filePath]);
 
   React.useEffect(() => {
     const root = ref.current;

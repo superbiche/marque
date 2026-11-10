@@ -16,6 +16,7 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 - Dependencies: `pnpm audit` reports no known vulnerability and `cargo audit` is clean (two documented transitive ignores). Runtime: DOMPurify 3.4.17, markdown-it 15 with markdown-it-anchor 10, Mermaid 12, lucide-react 1.x, tailwind-merge 3, Vite 7.3.7; Rust: tauri 2.12.5 with its build/plugin family, notify 8 with notify-debouncer-full 0.7 (drops the unmaintained `instant` crate); tooling: TypeScript 7, vitest 5, happy-dom 21.
 
 ### Added
+- Local images: `![](diagram.png)`, `./img/a.png`, `../shared/logo.svg`, absolute paths and `file://` URLs now render, for markdown images and raw `<img>` tags alike. Marque serves them through the Tauri asset protocol with a scope extended at open time to the document's registered folder (or, for a standalone file, its own directory); nothing else on disk becomes readable, so an image outside that scope stays blank until an enclosing directory is open as a folder. (Upstream report: GRVYDEV/marky#19.)
 - Open-source project files: `CONTRIBUTING.md`, `SECURITY.md` with private vulnerability reporting, `CODE_OF_CONDUCT.md`, `NOTICE`, issue and pull request templates, Dependabot (npm, cargo, GitHub Actions) and a CodeRabbit review configuration.
 
 ## [0.4.5] - 2026-08-25
