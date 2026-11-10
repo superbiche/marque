@@ -26,12 +26,32 @@ pub fn canonical_document_path(path: &str) -> Option<PathBuf> {
 }
 
 /// Directory the asset protocol may serve so that images referenced by
-/// `document` load: the registered folder that contains it when there is one
-/// (so `../` references within the workspace work), otherwise the document's
-/// own directory. Never the filesystem root.
-pub fn asset_scope_dir(document: &Path, folder_root: Option<PathBuf>) -> Option<PathBuf> {
-    let dir = folder_root.or_else(|| document.parent().map(Path::to_path_buf))?;
+/// `document` load. The base is the registered folder that contains the
+/// document, otherwise the document's own directory; when the base sits in a
+/// git repository, the scope widens to that repository's root so `../`
+/// references to files elsewhere in the repo work. A repository rooted at
+/// `home` or one of its ancestors is never considered (dotfiles
+/// repositories), and the filesystem root is never granted. All paths are
+/// canonical.
+pub fn asset_scope_dir(
+    document: &Path,
+    folder_root: Option<PathBuf>,
+    home: Option<&Path>,
+) -> Option<PathBuf> {
+    let base = folder_root.or_else(|| document.parent().map(Path::to_path_buf))?;
+    let dir = enclosing_repository(&base, home).unwrap_or(base);
     (dir.parent().is_some()).then_some(dir)
+}
+
+/// Nearest ancestor of `base` (itself included) holding a `.git` directory or
+/// file, searched strictly below `home`: the walk stops before reaching
+/// `home` or any of its ancestors. Unlike `folder::find_git_repo_root`, whose
+/// home ceiling is inclusive and lexical, both sides here are canonical.
+fn enclosing_repository(base: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    base.ancestors()
+        .take_while(|dir| home.is_none_or(|home| !home.starts_with(dir)))
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 /// Extend the asset protocol scope (read-only, in-memory, reset on restart)
@@ -41,7 +61,8 @@ pub fn grant_asset_scope(
     document: &Path,
     folder_root: Option<PathBuf>,
 ) -> AppResult<()> {
-    let Some(dir) = asset_scope_dir(document, folder_root) else {
+    let home = dirs::home_dir().and_then(|home| home.canonicalize().ok());
+    let Some(dir) = asset_scope_dir(document, folder_root, home.as_deref()) else {
         return Ok(());
     };
     app.asset_protocol_scope()
@@ -87,7 +108,7 @@ mod tests {
     fn asset_scope_prefers_the_registered_folder_root() {
         let doc = Path::new("/home/u/repo/docs/guide.md");
         assert_eq!(
-            asset_scope_dir(doc, Some(PathBuf::from("/home/u/repo"))),
+            asset_scope_dir(doc, Some(PathBuf::from("/home/u/repo")), None),
             Some(PathBuf::from("/home/u/repo"))
         );
     }
@@ -95,13 +116,13 @@ mod tests {
     #[test]
     fn asset_scope_falls_back_to_the_document_directory() {
         let doc = Path::new("/home/u/notes/plan.md");
-        assert_eq!(asset_scope_dir(doc, None), Some(PathBuf::from("/home/u/notes")));
+        assert_eq!(asset_scope_dir(doc, None, None), Some(PathBuf::from("/home/u/notes")));
     }
 
     #[test]
     fn asset_scope_never_grants_the_filesystem_root() {
-        assert_eq!(asset_scope_dir(Path::new("/plan.md"), None), None);
-        assert_eq!(asset_scope_dir(Path::new("/plan.md"), Some(PathBuf::from("/"))), None);
+        assert_eq!(asset_scope_dir(Path::new("/plan.md"), None, None), None);
+        assert_eq!(asset_scope_dir(Path::new("/plan.md"), Some(PathBuf::from("/")), None), None);
     }
 
     /// A document reached through a symlink to `/` must not grant the root:
@@ -117,9 +138,100 @@ mod tests {
         let document = canonical_document_path(lexical.to_str().unwrap()).unwrap();
         assert_eq!(document, PathBuf::from("/proc/version"));
         // `/proc` is a real directory: granted, bounded, not `/`.
-        assert_eq!(asset_scope_dir(&document, None), Some(PathBuf::from("/proc")));
+        assert_eq!(asset_scope_dir(&document, None, None), Some(PathBuf::from("/proc")));
         // A file directly under `/` would have `/` as its directory: refused.
-        assert_eq!(asset_scope_dir(Path::new("/guide.md"), None), None);
+        assert_eq!(asset_scope_dir(Path::new("/guide.md"), None, None), None);
+    }
+
+    /// A temp repository `repo/` (with `.git/`) holding `repo/docs/guide.md`
+    /// and `repo/assets/`; returns the canonical repo root.
+    fn temp_repo(dir: &Path) -> PathBuf {
+        let repo = dir.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        fs::create_dir_all(repo.join("docs")).unwrap();
+        fs::create_dir_all(repo.join("assets")).unwrap();
+        fs::write(repo.join("docs/guide.md"), "x").unwrap();
+        repo.canonicalize().unwrap()
+    }
+
+    #[test]
+    fn asset_scope_widens_a_standalone_document_to_its_repository() {
+        let dir = tempdir().unwrap();
+        let repo = temp_repo(dir.path());
+        let home = dir.path().canonicalize().unwrap();
+        assert_eq!(asset_scope_dir(&repo.join("docs/guide.md"), None, Some(&home)), Some(repo));
+    }
+
+    #[test]
+    fn asset_scope_widens_a_registered_subfolder_to_its_repository() {
+        let dir = tempdir().unwrap();
+        let repo = temp_repo(dir.path());
+        let home = dir.path().canonicalize().unwrap();
+        assert_eq!(
+            asset_scope_dir(&repo.join("docs/guide.md"), Some(repo.join("docs")), Some(&home)),
+            Some(repo)
+        );
+    }
+
+    #[test]
+    fn asset_scope_stops_at_the_nearest_repository() {
+        let dir = tempdir().unwrap();
+        let repo = temp_repo(dir.path());
+        // A submodule or linked worktree marks its root with a `.git` file.
+        let sub = repo.join("vendor/lib");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join(".git"), "gitdir: ../../.git/modules/lib").unwrap();
+        fs::write(sub.join("README.md"), "x").unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        assert_eq!(asset_scope_dir(&sub.join("README.md"), None, Some(&home)), Some(sub));
+    }
+
+    #[test]
+    fn asset_scope_ignores_a_repository_at_home_or_above() {
+        let dir = tempdir().unwrap();
+        let home = temp_repo(dir.path());
+        let doc = home.join("docs/guide.md");
+        // `home` itself is a repository (a dotfiles checkout): not widened.
+        assert_eq!(asset_scope_dir(&doc, None, Some(&home)), Some(home.join("docs")));
+        // A repository above `home` is ignored as well.
+        let below = home.join("docs");
+        assert_eq!(asset_scope_dir(&doc, None, Some(&below)), Some(home.join("docs")));
+    }
+
+    #[test]
+    fn asset_scope_keeps_the_document_directory_outside_a_repository() {
+        let dir = tempdir().unwrap();
+        let notes = dir.path().join("notes");
+        fs::create_dir_all(&notes).unwrap();
+        fs::write(notes.join("plan.md"), "x").unwrap();
+        let notes = notes.canonicalize().unwrap();
+        // Home is the tempdir: whatever repository encloses the system temp
+        // directory sits above it and is never reached.
+        let home = dir.path().canonicalize().unwrap();
+        assert_eq!(asset_scope_dir(&notes.join("plan.md"), None, Some(&home)), Some(notes));
+    }
+
+    /// The walk stops below home even when a repository encloses home (a
+    /// dotfiles checkout, or a symlinked home whose real path sits in one):
+    /// the document's own directory is granted, never the outer repository.
+    #[test]
+    fn asset_scope_never_walks_up_to_a_repository_enclosing_home() {
+        let dir = tempdir().unwrap();
+        let outer = dir.path().join("outer");
+        fs::create_dir_all(outer.join(".git")).unwrap();
+        let home = outer.join("home/u");
+        fs::create_dir_all(home.join("notes")).unwrap();
+        fs::write(home.join("notes/plan.md"), "x").unwrap();
+        let home = home.canonicalize().unwrap();
+        assert_eq!(
+            asset_scope_dir(&home.join("notes/plan.md"), None, Some(&home)),
+            Some(home.join("notes"))
+        );
+        // A registered folder that is home itself is granted as is.
+        assert_eq!(
+            asset_scope_dir(&home.join("notes/plan.md"), Some(home.clone()), Some(&home)),
+            Some(home)
+        );
     }
 
     #[test]
