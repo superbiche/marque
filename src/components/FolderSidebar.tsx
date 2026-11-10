@@ -235,7 +235,7 @@ export const FolderSidebar = memo(function FolderSidebar({
   const renderFolder = (f: AnnotatedFolder) => {
     const tree = sortedTrees[f.id];
     const isCollapsed = collapsed[f.id];
-    const hasLabel = f.group?.trim() !== "";
+    const hasLabel = Boolean(f.group?.trim());
     return (
       <div key={f.id} id={`folder-${f.id}`} className="group/folder mb-1">
         <ContextMenu>
@@ -475,7 +475,7 @@ export const FolderSidebar = memo(function FolderSidebar({
                   }
                 >
                   <ContextMenu>
-                    <ContextMenuTrigger asChild>
+                    <ContextMenuTrigger asChild disabled={group.kind === "ungrouped"}>
                       <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-accent">
                         {collapsedGroups[group.key] ? (
                           <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
@@ -491,12 +491,10 @@ export const FolderSidebar = memo(function FolderSidebar({
                       </CollapsibleTrigger>
                     </ContextMenuTrigger>
                     <ContextMenuContent>
-                      {group.kind !== "ungrouped" && (
-                        <ContextMenuItem onSelect={() => handleRenameGroup(group)}>
-                          <Tags />
-                          Rename group…
-                        </ContextMenuItem>
-                      )}
+                      <ContextMenuItem onSelect={() => handleRenameGroup(group)}>
+                        <Tags />
+                        Rename group…
+                      </ContextMenuItem>
                     </ContextMenuContent>
                   </ContextMenu>
                   <CollapsibleContent>

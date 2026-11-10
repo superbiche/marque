@@ -43,6 +43,7 @@ export function GroupLabelDialog({
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
         <form
+          className="grid gap-4"
           onSubmit={(event) => {
             event.preventDefault();
             onOpenChange(false);
