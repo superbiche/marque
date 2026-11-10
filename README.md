@@ -57,7 +57,7 @@ Viewing
 - **Print** — ⌘P prints the open document with a paper-friendly stylesheet.
 - **Copy** — copy the document's markdown source, or copy exactly what you selected.
 - **Light & dark themes** — follow the system or toggle; a warm, low-glare dark palette.
-- **Local images** — images referenced relative to the document (or by absolute path) load like in any editor; only the document's folder is made readable to the viewer.
+- **Local images** — images referenced relative to the document (or by absolute path) load like in any editor; only the document's folder is made readable to the viewer. An image outside that folder (`../shared/logo.png` from a file opened on its own) loads once an enclosing directory is open as a folder.
 
 Workspaces
 
