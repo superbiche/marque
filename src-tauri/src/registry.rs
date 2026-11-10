@@ -200,7 +200,7 @@ impl FolderRegistry {
         }
         let mut updated = Vec::with_capacity(folder_ids.len());
         for folder in inner.settings.folders.iter_mut() {
-            if folder_ids.iter().any(|id| *id == folder.id) {
+            if folder_ids.contains(&folder.id) {
                 folder.group = group.clone();
                 updated.push(folder.clone());
             }
