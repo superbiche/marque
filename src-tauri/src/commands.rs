@@ -119,6 +119,20 @@ pub fn remove_folder(
 }
 
 #[tauri::command]
+pub fn set_folder_group(
+    app: AppHandle,
+    folder_ids: Vec<String>,
+    group: Option<String>,
+    registry: State<'_, SharedRegistry>,
+) -> AppResult<Vec<Folder>> {
+    let folders = registry.set_folder_group(&folder_ids, group)?;
+    registry.save(&settings_dir())?;
+    let payload = folders.first().map(|folder| folder.id.as_str()).unwrap_or("");
+    let _ = app.emit("folder://changed", payload);
+    Ok(folders)
+}
+
+#[tauri::command]
 pub fn read_folder_tree(id: String, registry: State<'_, SharedRegistry>) -> AppResult<TreeNode> {
     registry
         .tree_or_empty(&id)

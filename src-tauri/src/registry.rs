@@ -161,6 +161,7 @@ impl FolderRegistry {
             name,
             path: path_str,
             added_at: chrono_now(),
+            group: None,
         };
         inner.settings.add_folder(folder.clone());
         Ok((folder, true))
@@ -171,6 +172,40 @@ impl FolderRegistry {
         inner.settings.remove_folder(id);
         inner.trees.remove(id);
         inner.index_by_folder.remove(id);
+    }
+
+    /// Set or clear the user-defined group label on the given folders. The
+    /// label is trimmed; an empty or whitespace-only label means no label
+    /// (the folders return to automatic repository grouping). An unknown
+    /// folder id is an error and nothing is changed.
+    pub fn set_folder_group(
+        &self,
+        folder_ids: &[String],
+        group: Option<String>,
+    ) -> AppResult<Vec<Folder>> {
+        let group = group
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty());
+
+        let mut inner = self.inner.write();
+        for id in folder_ids {
+            if !inner
+                .settings
+                .folders
+                .iter()
+                .any(|folder| folder.id == *id)
+            {
+                return Err(AppError::NotFound(format!("folder {id}")));
+            }
+        }
+        let mut updated = Vec::with_capacity(folder_ids.len());
+        for folder in inner.settings.folders.iter_mut() {
+            if folder_ids.iter().any(|id| *id == folder.id) {
+                folder.group = group.clone();
+                updated.push(folder.clone());
+            }
+        }
+        Ok(updated)
     }
 
     /// Rebuild one folder without holding the registry write lock during the
@@ -292,6 +327,16 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    fn test_folder(id: &str, group: Option<&str>) -> Folder {
+        Folder {
+            id: id.into(),
+            name: id.into(),
+            path: format!("/tmp/{id}"),
+            added_at: "now".into(),
+            group: group.map(str::to_string),
+        }
+    }
+
     #[test]
     fn saved_folders_start_unhydrated() {
         let dir = tempdir().unwrap();
@@ -302,6 +347,7 @@ mod tests {
                 name: "folder".into(),
                 path: dir.path().to_string_lossy().into_owned(),
                 added_at: "now".into(),
+                group: None,
             }],
             ..Default::default()
         };
@@ -319,6 +365,7 @@ mod tests {
             name: id.into(),
             path: path.into(),
             added_at: "now".into(),
+            group: None,
         };
         let registry = FolderRegistry::from_settings(Settings {
             folders: vec![folder("outer", "/home/u/repo"), folder("inner", "/home/u/repo/docs")],
@@ -354,6 +401,7 @@ mod tests {
                 name: "f".into(),
                 path: link.to_string_lossy().into_owned(),
                 added_at: "now".into(),
+                group: None,
             }],
             ..Default::default()
         });
@@ -449,5 +497,63 @@ mod tests {
             inner.index_by_folder[&second.id][0].relative_path,
             "b.md"
         );
+    }
+
+    #[test]
+    fn set_folder_group_trims_and_applies_to_several_ids() {
+        let registry = FolderRegistry::from_settings(Settings {
+            folders: vec![test_folder("f1", None), test_folder("f2", None), test_folder("f3", None)],
+            ..Default::default()
+        });
+
+        let updated = registry
+            .set_folder_group(&["f1".into(), "f2".into()], Some("  Plans  ".into()))
+            .unwrap();
+
+        assert_eq!(updated.len(), 2);
+        assert!(updated
+            .iter()
+            .all(|folder| folder.group == Some("Plans".into())));
+        let all = registry.folders();
+        assert_eq!(
+            all.iter().filter(|f| f.group == Some("Plans".into())).count(),
+            2
+        );
+        assert_eq!(all.iter().find(|f| f.id == "f3").unwrap().group, None);
+    }
+
+    #[test]
+    fn set_folder_group_empty_label_clears_existing_label() {
+        let registry = FolderRegistry::from_settings(Settings {
+            folders: vec![test_folder("f1", Some("Plans"))],
+            ..Default::default()
+        });
+
+        let updated = registry
+            .set_folder_group(&["f1".into()], Some("   ".into()))
+            .unwrap();
+
+        assert_eq!(updated[0].group, None);
+        assert_eq!(registry.folders()[0].group, None);
+    }
+
+    #[test]
+    fn set_folder_group_unknown_id_changes_nothing() {
+        let registry = FolderRegistry::from_settings(Settings {
+            folders: vec![test_folder("f1", Some("Plans")), test_folder("f2", None)],
+            ..Default::default()
+        });
+
+        let err = registry
+            .set_folder_group(&["f1".into(), "missing".into()], Some("New".into()))
+            .unwrap_err();
+
+        assert!(matches!(err, AppError::NotFound(_)));
+        let all = registry.folders();
+        assert_eq!(
+            all.iter().find(|f| f.id == "f1").unwrap().group,
+            Some("Plans".into())
+        );
+        assert_eq!(all.iter().find(|f| f.id == "f2").unwrap().group, None);
     }
 }

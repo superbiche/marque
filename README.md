@@ -66,6 +66,7 @@ Workspaces
 - **Pinned files** — pin any file to its own section above the folders, independent of workspaces.
 - **Sidebar that remembers** — expanded directories are restored across sessions; collapse-all per folder; `.gitignore` and the usual build directories are respected.
 - **Sort by last modified** — a toggle in the folder sidebar header orders each tree newest first (directories still before files); the choice persists across sessions.
+- **Group labels** — right-click a folder in the sidebar to give it a group label (or remove it from a group), and right-click a group header to rename the group. Folders sharing a label collect under one header even when they live in different repositories; unlabeled folders keep the automatic repository grouping.
 - **Drag out, reveal** — drag a file from the sidebar or a tab into any drop target; open a file's location in the system file manager.
 - **Native dialogs** — file and folder pickers go through the XDG desktop portal, so KDE and other non-GNOME desktops get their own dialog.
 

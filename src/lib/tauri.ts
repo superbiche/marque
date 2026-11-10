@@ -11,6 +11,8 @@ export interface Folder {
   name: string;
   path: string;
   added_at: string;
+  /** User-defined sidebar group label; absent/empty keeps repository grouping. */
+  group?: string | null;
 }
 
 export interface AnnotatedFolder extends Folder {
@@ -56,6 +58,8 @@ export const tauri = {
   listFoldersGrouped: () => invoke<AnnotatedFolder[]>("list_folders_grouped"),
   addFolder: (path: string) => invoke<Folder>("add_folder", { path }),
   removeFolder: (id: string) => invoke<void>("remove_folder", { id }),
+  setFolderGroup: (folderIds: string[], group: string | null) =>
+    invoke<Folder[]>("set_folder_group", { folderIds, group }),
   readFolderTree: (id: string) => invoke<TreeNode>("read_folder_tree", { id }),
   searchFiles: (query: string, limit = 50) =>
     invoke<SearchResult[]>("search_files", { args: { query, limit } }),
