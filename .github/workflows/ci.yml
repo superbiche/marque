@@ -4,6 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow calls this file as its gate, so a tag is released only
+  # from a tree that passes the same checks as a pull request.
+  workflow_call:
+    inputs:
+      ref:
+        description: "Commit to check (default: the triggering ref)"
+        required: false
+        type: string
 
 # Public repository: jobs run on GitHub-hosted runners only. Never point a job
 # at a self-hosted runner here — any fork can open a PR that executes on it.
@@ -11,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -19,6 +27,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -32,6 +42,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Tauri crate/npm versions
+        run: node scripts/check-tauri-versions.mjs
+
       - name: Typecheck
         run: pnpm typecheck
 
@@ -42,6 +55,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Install system dependencies
         run: |
@@ -71,3 +86,29 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+
+  # macOS and Windows compile and test the backend on every pull request, so a
+  # platform-specific break surfaces before a release tag, not at bundle time.
+  rust-platforms:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
