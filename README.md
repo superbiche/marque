@@ -80,9 +80,19 @@ Rendering
 
 ## Install
 
-### Packages (Linux x86_64)
+### Packages
 
-Every release ships a `.deb`, an `.rpm`, and an `.AppImage` on the [releases page](https://github.com/superbiche/marque/releases/latest). The packages are built on Ubuntu 22.04 (glibc 2.35), so any distribution with glibc 2.35 or newer is expected to work (Ubuntu 22.04+, Debian 12+, Fedora 40+). Marque is developed and tested on Fedora / KDE Plasma / Wayland; other distributions are not routinely tested.
+Every release on the [releases page](https://github.com/superbiche/marque/releases/latest) ships:
+
+| Platform | Files |
+|---|---|
+| Linux x86_64 and arm64 | `.deb`, `.rpm`, `.AppImage` |
+| macOS (universal: Apple silicon and Intel) | `.dmg` |
+| Windows x64 | `-setup.exe` (NSIS) and `.msi` |
+
+macOS, Windows and Linux arm64 builds start with 0.4.7. Marque is developed and tested on Fedora / KDE Plasma / Wayland; the macOS and Windows builds come from CI and are not yet routinely tested on those systems, so reports are welcome.
+
+**Linux.** The packages are built on Ubuntu 22.04 (glibc 2.35), so any distribution with glibc 2.35 or newer is expected to work (Ubuntu 22.04+, Debian 12+, Fedora 40+). The deb and rpm install `/usr/bin/marque` and register Marque for markdown files in the file manager.
 
 ```bash
 # Fedora
@@ -92,7 +102,15 @@ sudo dnf install ./Marque-*.x86_64.rpm
 sudo apt install ./Marque_*_amd64.deb
 ```
 
-Then install the CLI wrapper so `marque FILE` works from any terminal. Download [`scripts/install-cli.sh`](scripts/install-cli.sh), read it, and run it; it only writes a small wrapper to `~/.local/bin/marque`.
+To make `marque FILE` return to the prompt immediately instead of holding the terminal, install the CLI wrapper: download [`scripts/install-cli.sh`](scripts/install-cli.sh), read it, and run it; it only writes a small wrapper to `~/.local/bin/marque`.
+
+**macOS.** The app is ad-hoc signed but not notarized (no Apple Developer ID yet), so Gatekeeper blocks the first launch: open it once from Finder with right-click → Open, or allow it in System Settings → Privacy & Security → Open Anyway. If macOS reports that the app "is damaged", first check the download (see [Verifying a release](#verifying-a-release)); a verified, un-notarized download is usually only quarantined, which `xattr -dr com.apple.quarantine /Applications/Marque.app` clears. For the CLI: `ln -s /Applications/Marque.app/Contents/MacOS/marque /usr/local/bin/marque`.
+
+**Windows.** The installers are not code-signed yet, so SmartScreen may warn on first run (More info → Run anyway). Add the install directory to `PATH` to use `marque FILE` from a terminal.
+
+### Verifying a release
+
+Release tags are signed by the maintainer, and the release workflow refuses any tag that is not. Each release lists every asset in `SHA256SUMS`, includes an SPDX SBOM, and attaches GitHub build provenance to every file, `SHA256SUMS` included; its notes give the exact commands (the signer's fingerprint check, `gh attestation verify`, `sha256sum -c`).
 
 ### From Source (Fedora / Linux)
 

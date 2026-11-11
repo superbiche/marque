@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Added
+- Release builds for macOS (universal `.dmg`, ad-hoc signed, not notarized), Windows x64 (NSIS installer and MSI, unsigned) and Linux arm64 (deb, rpm, AppImage), alongside Linux x86_64. (Upstream requests: GRVYDEV/marky#10 and GRVYDEV/marky#12 for macOS, GRVYDEV/marky#11 for Windows.)
+- Markdown file association: the deb and rpm register Marque for `text/markdown` and pass the opened file through (`Exec=marque %F`), and the macOS and Windows bundles declare `.md`, `.markdown` and `.mdx`. (From GRVYDEV/marky#15 by @cjthompson.)
+- Verifiable releases: the release workflow refuses a tag that is not signed by the maintainer's key, lists every asset in `SHA256SUMS` with an SPDX SBOM, attaches GitHub build provenance to every file, and publishes a release only after every asset is uploaded and its digest re-checked.
+
+### Changed
+- CI checks that each Tauri crate and its npm package agree on major.minor (a mismatch made `tauri build` fail the first 0.4.6 release run) and runs the backend tests on macOS and Windows for every pull request.
+
 ## [0.4.6] - 2026-11-11
 
 ### Changed

@@ -25,18 +25,33 @@ regressions) or structural rewrites. Ambiguous cases: ask, don't guess.
 4. Wait for CI green on the release commit. When querying
    `gh run list --commit`, use the FULL 40-char SHA — a short SHA silently
    matches nothing.
-5. Push a GPG-signed `vX.Y.Z` tag. The tag triggers
-   `.github/workflows/release.yml` (deb, rpm, AppImage); its runs are keyed
-   on `headBranch == "vX.Y.Z"`.
-6. The release is done only when all three assets exist on the GitHub
-   release: `Marque-X.Y.Z-1.x86_64.rpm`, `Marque_X.Y.Z_amd64.AppImage`,
-   `Marque_X.Y.Z_amd64.deb`.
+5. Push a GPG-signed annotated `vX.Y.Z` tag on the release commit. The tag
+   triggers `.github/workflows/release.yml`: `verify` refuses a tag whose
+   primary key fingerprint differs from the repository variable
+   `RELEASE_SIGNING_FINGERPRINT`, or whose version fields / CHANGELOG section
+   disagree with the tag; then gates (the CI workflow), four build jobs, stage
+   (inventory, SBOM, SHA256SUMS) and publish (provenance, draft, upload,
+   digest re-check, publication). Runs are keyed on `headBranch == "vX.Y.Z"`.
+6. The release is done only when it is published (not a draft) with the
+   inventory of `scripts/release/expected-assets.sh X.Y.Z` plus
+   `SHA256SUMS` and `Marque_X.Y.Z.spdx.json`. A failed run leaves at most a
+   draft. A transient failure is re-run with
+   `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false`
+   (dispatched on the tag, so provenance names the tagged commit; verify
+   refuses any other ref; publish.sh reuses the draft and never touches a
+   published release). A fix that changes the tree ships as the
+   next patch version, never by moving the tag.
 7. **Post-release: download the rpm to `~/Downloads`** so it is ready to
    install locally:
 
    ```sh
-   gh release download vX.Y.Z --pattern '*.rpm' --dir ~/Downloads --clobber
+   gh release download vX.Y.Z --pattern '*.x86_64.rpm' --dir ~/Downloads --clobber
    ```
+
+To exercise the pipeline without releasing (a workflow change, a new
+platform): `gh workflow run release.yml --ref <branch> -f tag=<latest signed tag>`
+(`dry_run` defaults to true: it verifies that tag, builds the branch head and
+stages, but publishes nothing).
 
 Watcher shape for steps 4–6: one background script that polls each stage
 and fails loudly per stage (CI-FAILED / TAG-PUSH-FAILED / RELEASE-FAILED)

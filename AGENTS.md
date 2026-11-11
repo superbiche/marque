@@ -28,7 +28,7 @@ Live project state is NOT in this file: `ROADMAP.md` carries the wanted-later le
 
 If a request would require swapping one of these, stop and confirm.
 
-Platform reality: developed and used on Fedora Linux / Wayland, built against system `webkit2gtk4.1`. Releases are built by `.github/workflows/release.yml` (deb, rpm, AppImage) on `v*` tags — the upstream marky release machinery stays gone.
+Platform reality: developed and used on Fedora Linux / Wayland, built against system `webkit2gtk4.1`. Releases are built by `.github/workflows/release.yml` on maintainer-signed `v*` tags: Linux x86_64/arm64 (deb, rpm, AppImage), macOS universal (dmg), Windows x64 (NSIS, MSI) — the upstream marky release machinery stays gone.
 
 ## Project layout
 
@@ -72,6 +72,7 @@ scripts/     Install / dev helper scripts
 - **Always sanitize rendered HTML with DOMPurify** before setting `dangerouslySetInnerHTML`. Markdown files may contain raw HTML.
 - External links (`target="_blank"`) must go through the Tauri opener plugin to open in the system browser, not the webview.
 - Tauri capabilities: grant only `fs:read` on user-selected paths, not blanket filesystem access.
+- Release trust: `scripts/release/verify-tag.sh` gates every release on the maintainer's primary key fingerprint (repository variable `RELEASE_SIGNING_FINGERPRINT`); only `scripts/release/publish.sh` makes a release public, after the inventory and digest checks. Never weaken either or publish by another path.
 - Local images go through the Tauri asset protocol. Its static scope in `tauri.conf.json` stays empty; `read_file` extends it at runtime (`fs::grant_asset_scope`) to the opened document's registered folder root or its own directory, widened to the enclosing git repository root unless that root is the home directory or one of its ancestors. Never add a blanket pattern such as `$HOME/**` there. Image `src` rewriting lives in the DOMPurify hook in `src/lib/markdown.ts`; the path resolver (`src/lib/images.ts`) must keep returning `null` for remote and foreign-scheme sources.
 
 ## Running / building
