@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.6] - 2026-11-11
 
 ### Changed
 - The repository is public. CI and the release job run on GitHub-hosted runners; actions are pinned by commit SHA.
