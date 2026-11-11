@@ -114,9 +114,9 @@ To make `marque FILE` return to the prompt immediately instead of holding the te
 |---|---|
 | macOS ([Homebrew tap](https://github.com/superbiche/homebrew-tap)) | `brew tap superbiche/tap`, then `brew trust superbiche/tap` (Homebrew 6 and later), then `brew install --cask superbiche/tap/marque` |
 | Windows ([Scoop bucket](https://github.com/superbiche/scoop-bucket)) | `scoop bucket add superbiche https://github.com/superbiche/scoop-bucket` then `scoop install superbiche/marque` |
-| Linux, the `marque` command only, from 0.4.9 ([mise](https://mise.jdx.dev) with [packslip](https://packslip.dev)) | `mise use -g packslip:github.com/superbiche/marque` |
+| Linux, the `marque` command only, from 0.4.9 ([mise](https://mise.jdx.dev) or [packslip](https://packslip.dev)) | `mise use -g packslip:github.com/superbiche/marque`, or `packslip install github.com/superbiche/marque --pin ps1_5x4m7g7graj2ewtppa5pspwtbq` |
 
-The tap and the bucket update themselves from each release only after checking its build provenance. Through mise, Linux gets the AppImage as the `marque` command, verified against the release's signed packslip, without desktop integration; use the deb or rpm for the file manager entry.
+The tap and the bucket update themselves from each release only after checking its build provenance. `ps1_5x4m7g7graj2ewtppa5pspwtbq` is the packslip signer fingerprint of marque's release workflow (`packslip pin` on the 0.4.9 bundle); with `--pin`, packslip accepts only releases signed there, even on a first install. Through mise, Linux gets the AppImage as the `marque` command, verified against the release's signed packslip, without desktop integration; use the deb or rpm for the file manager entry.
 
 ### Verifying a release
 
