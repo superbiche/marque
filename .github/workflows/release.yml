@@ -8,8 +8,10 @@ name: Release
 #
 # workflow_dispatch: `dry_run` (default) runs every stage except publish and
 # builds the dispatched branch head, so the pipeline can be exercised from a
-# pull request branch without releasing; with `dry_run: false` it (re)publishes
-# an existing tag whose release is missing or still a draft.
+# pull request branch without releasing. With `dry_run: false` it (re)publishes
+# an existing tag whose release is missing or still a draft, and must be
+# dispatched on the tag itself (`--ref vX.Y.Z`): build provenance takes its
+# source commit from the run, so a publishing run's commit is the tag's.
 
 on:
   push:
@@ -42,6 +44,7 @@ jobs:
       tag: ${{ steps.verify.outputs.tag }}
       version: ${{ steps.verify.outputs.version }}
       sha: ${{ steps.verify.outputs.sha }}
+      tag_object: ${{ steps.verify.outputs.tag_object }}
       prerelease: ${{ steps.verify.outputs.prerelease }}
       build_ref: ${{ steps.ref.outputs.build_ref }}
     steps:
@@ -70,6 +73,9 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then
             echo "dry run: building the dispatched head $HEAD_SHA"
             echo "build_ref=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          elif [ "$HEAD_SHA" != "$TAG_SHA" ]; then
+            echo "::error::a publishing run must run on the tagged commit $TAG_SHA (this run is on $HEAD_SHA); dispatch with --ref <tag>"
+            exit 1
           else
             echo "build_ref=$TAG_SHA" >> "$GITHUB_OUTPUT"
           fi
@@ -187,19 +193,25 @@ jobs:
           path: release-assets
           merge-multiple: true
 
+      # The built tree's version names the assets. In a real run verify has
+      # already proved it equals the tag; in a dry run the branch may differ.
+      - name: Read the built version
+        id: built
+        run: echo "version=$(jq -r .version src-tauri/tauri.conf.json)" >> "$GITHUB_OUTPUT"
+
       - name: Generate SBOM
         uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           path: .
           format: spdx-json
-          output-file: release-assets/Marque_${{ needs.verify.outputs.version }}.spdx.json
+          output-file: release-assets/Marque_${{ steps.built.outputs.version }}.spdx.json
           upload-artifact: false
           upload-release-assets: false
 
       - name: Check inventory and write SHA256SUMS
         env:
           ASSET_DIR: release-assets
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ steps.built.outputs.version }}
         run: scripts/release/stage.sh
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -239,12 +251,18 @@ jobs:
         with:
           subject-checksums: release-assets/SHA256SUMS
 
+      - name: Attest the checksum manifest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: release-assets/SHA256SUMS
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.verify.outputs.tag }}
           VERSION: ${{ needs.verify.outputs.version }}
           SHA: ${{ needs.verify.outputs.sha }}
+          TAG_OBJECT: ${{ needs.verify.outputs.tag_object }}
           PRERELEASE: ${{ needs.verify.outputs.prerelease }}
           EXPECTED_FPR: ${{ vars.RELEASE_SIGNING_FINGERPRINT }}
           ASSET_DIR: release-assets

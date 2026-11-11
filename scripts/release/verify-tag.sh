@@ -4,7 +4,7 @@
 # field plus the CHANGELOG must name the tag's version.
 #
 # Inputs (environment): TAG, EXPECTED_FPR, SIGNER_KEYS_URL.
-# Outputs: tag, version, sha, prerelease lines appended to $GITHUB_OUTPUT
+# Outputs: tag, version, sha, tag_object, prerelease lines appended to $GITHUB_OUTPUT
 # (or printed when it is unset, for local runs).
 set -euo pipefail
 
@@ -38,6 +38,7 @@ primary="$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $NF }' <<<"$status"
 [[ "$primary" == "$EXPECTED_FPR" ]] || fail "$TAG is signed by primary key '$primary', expected '$EXPECTED_FPR'"
 
 sha="$(git rev-list -n 1 "refs/tags/$TAG")"
+tag_object="$(git rev-parse "refs/tags/$TAG")"
 git merge-base --is-ancestor "$sha" origin/main || fail "$TAG ($sha) is not on main"
 
 field() { git show "$sha:$1"; }
@@ -54,5 +55,6 @@ echo "verified $TAG -> $sha (primary key $primary)"
   echo "tag=$TAG"
   echo "version=$version"
   echo "sha=$sha"
+  echo "tag_object=$tag_object"
   echo "prerelease=$prerelease"
 } >> "${GITHUB_OUTPUT:-/dev/stdout}"

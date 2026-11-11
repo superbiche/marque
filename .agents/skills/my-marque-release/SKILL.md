@@ -36,9 +36,10 @@ regressions) or structural rewrites. Ambiguous cases: ask, don't guess.
    inventory of `scripts/release/expected-assets.sh X.Y.Z` plus
    `SHA256SUMS` and `Marque_X.Y.Z.spdx.json`. A failed run leaves at most a
    draft. A transient failure is re-run with
-   `gh workflow run release.yml --ref main -f tag=vX.Y.Z -f dry_run=false`
-   (it rebuilds the tagged commit; publish.sh reuses the draft and never
-   touches a published release). A fix that changes the tree ships as the
+   `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false`
+   (dispatched on the tag, so provenance names the tagged commit; verify
+   refuses any other ref; publish.sh reuses the draft and never touches a
+   published release). A fix that changes the tree ships as the
    next patch version, never by moving the tag.
 7. **Post-release: download the rpm to `~/Downloads`** so it is ready to
    install locally:
