@@ -11,7 +11,7 @@ name: Release
 # pull request branch without releasing. With `dry_run: false` it (re)publishes
 # an existing tag whose release is missing or still a draft, and must be
 # dispatched on the tag itself (`--ref vX.Y.Z`): build provenance takes its
-# source commit from the run, so a publishing run's commit is the tag's.
+# source ref and commit from the run, so a publishing run's must be the tag's.
 
 on:
   push:
@@ -67,14 +67,16 @@ jobs:
         id: ref
         env:
           DRY_RUN: ${{ inputs.dry_run }}
+          TAG: ${{ steps.verify.outputs.tag }}
           TAG_SHA: ${{ steps.verify.outputs.sha }}
           HEAD_SHA: ${{ github.sha }}
+          HEAD_REF: ${{ github.ref }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
             echo "dry run: building the dispatched head $HEAD_SHA"
             echo "build_ref=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          elif [ "$HEAD_SHA" != "$TAG_SHA" ]; then
-            echo "::error::a publishing run must run on the tagged commit $TAG_SHA (this run is on $HEAD_SHA); dispatch with --ref <tag>"
+          elif [ "$HEAD_REF" != "refs/tags/$TAG" ] || [ "$HEAD_SHA" != "$TAG_SHA" ]; then
+            echo "::error::a publishing run must run on refs/tags/$TAG at $TAG_SHA (this run: $HEAD_REF at $HEAD_SHA); dispatch with --ref $TAG"
             exit 1
           else
             echo "build_ref=$TAG_SHA" >> "$GITHUB_OUTPUT"
