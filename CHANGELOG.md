@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.8] - 2026-11-11
 
 ### Added
 - Release builds for macOS (universal `.dmg`, ad-hoc signed, not notarized), Windows x64 (NSIS installer and MSI, unsigned) and Linux arm64 (deb, rpm, AppImage), alongside Linux x86_64. (Upstream requests: GRVYDEV/marky#10 and GRVYDEV/marky#12 for macOS, GRVYDEV/marky#11 for Windows.)
