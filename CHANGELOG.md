@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [0.4.7] - 2026-11-11
+## [Unreleased]
 
 ### Added
 - Release builds for macOS (universal `.dmg`, ad-hoc signed, not notarized), Windows x64 (NSIS installer and MSI, unsigned) and Linux arm64 (deb, rpm, AppImage), alongside Linux x86_64. (Upstream requests: GRVYDEV/marky#10 and GRVYDEV/marky#12 for macOS, GRVYDEV/marky#11 for Windows.)
@@ -17,6 +17,13 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 
 ### Changed
 - CI checks that each Tauri crate and its npm package agree on major.minor (a mismatch made `tauri build` fail the first 0.4.6 release run) and runs the backend tests on macOS and Windows for every pull request.
+
+### Fixed
+- The release workflow's publication script was not executable, so the signed `v0.4.7` tag built and attested every asset but published nothing. CI now checks that every release script is executable.
+
+## [0.4.7] - 2026-11-11 (tagged, not published)
+
+The signed `v0.4.7` tag exists but has no release: its publication step failed (see Fixed above). Its changes ship in the next release.
 
 ## [0.4.6] - 2026-11-11
 

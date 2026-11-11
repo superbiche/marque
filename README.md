@@ -90,7 +90,7 @@ Every release on the [releases page](https://github.com/superbiche/marque/releas
 | macOS (universal: Apple silicon and Intel) | `.dmg` |
 | Windows x64 | `-setup.exe` (NSIS) and `.msi` |
 
-macOS, Windows and Linux arm64 builds start with 0.4.7. Marque is developed and tested on Fedora / KDE Plasma / Wayland; the macOS and Windows builds come from CI and are not yet routinely tested on those systems, so reports are welcome.
+macOS, Windows and Linux arm64 builds start with 0.4.8. Marque is developed and tested on Fedora / KDE Plasma / Wayland; the macOS and Windows builds come from CI and are not yet routinely tested on those systems, so reports are welcome.
 
 **Linux.** The packages are built on Ubuntu 22.04 (glibc 2.35), so any distribution with glibc 2.35 or newer is expected to work (Ubuntu 22.04+, Debian 12+, Fedora 40+). The deb and rpm install `/usr/bin/marque` and register Marque for markdown files in the file manager.
 
