@@ -127,7 +127,8 @@ mod tests {
 
     /// A document reached through a symlink to `/` must not grant the root:
     /// canonicalization lands the document at `/<name>`, whose parent is `/`.
-    #[cfg(unix)]
+    /// Linux only: the fixture relies on `/proc/version`.
+    #[cfg(target_os = "linux")]
     #[test]
     fn asset_scope_rejects_a_document_reached_through_a_root_symlink() {
         let dir = tempdir().unwrap();
