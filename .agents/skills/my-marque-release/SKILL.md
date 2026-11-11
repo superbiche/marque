@@ -30,18 +30,23 @@ regressions) or structural rewrites. Ambiguous cases: ask, don't guess.
    primary key fingerprint differs from the repository variable
    `RELEASE_SIGNING_FINGERPRINT`, or whose version fields / CHANGELOG section
    disagree with the tag; then gates (the CI workflow), four build jobs, stage
-   (inventory, SBOM, SHA256SUMS) and publish (provenance, draft, upload,
-   digest re-check, publication). Runs are keyed on `headBranch == "vX.Y.Z"`.
+   (inventory, SBOM, SHA256SUMS), packslip (keyless-signed manifest of the
+   installers) and publish (inventory re-sealed with the packslip, provenance,
+   draft, upload, digest re-check, publication). Runs are keyed on `headBranch == "vX.Y.Z"`.
 6. The release is done only when it is published (not a draft) with the
    inventory of `scripts/release/expected-assets.sh X.Y.Z` plus
-   `SHA256SUMS` and `Marque_X.Y.Z.spdx.json`. A failed run leaves at most a
+   `SHA256SUMS`, `Marque_X.Y.Z.spdx.json` and `packslip.sigstore.json`. A failed run leaves at most a
    draft. A transient failure is re-run with
    `gh workflow run release.yml --ref vX.Y.Z -f tag=vX.Y.Z -f dry_run=false`
    (dispatched on the tag, so provenance names the tagged commit; verify
    refuses any other ref; publish.sh reuses the draft and never touches a
    published release). A fix that changes the tree ships as the
    next patch version, never by moving the tag.
-7. **Post-release: download the rpm to `~/Downloads`** so it is ready to
+7. Package managers: run `gh workflow run update.yml -R superbiche/homebrew-tap`
+   and `gh workflow run update.yml -R superbiche/scoop-bucket` (otherwise they
+   pick the release up at their daily run); each must end with a
+   `marque X.Y.Z` commit, after its provenance check and install test.
+8. **Post-release: download the rpm to `~/Downloads`** so it is ready to
    install locally:
 
    ```sh

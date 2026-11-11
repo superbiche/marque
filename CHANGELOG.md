@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Added
+- Package managers: a Homebrew tap (`brew install --cask superbiche/tap/marque`, the app plus the `marque` command) and a Scoop bucket (`scoop install superbiche/marque`). Both update themselves from each release after checking its build provenance and installing it on a macOS or Windows runner.
+- Each release carries a signed [packslip](https://packslip.dev) (`packslip.sigstore.json`) describing every installer, so `mise use -g packslip:github.com/superbiche/marque` installs the `marque` command on Linux and `packslip verify` checks any download.
+
+### Changed
+- README: Marque is presented as an independently maintained fork of marky, not endorsed by its author, for Linux, macOS and Windows.
+
 ## [0.4.8] - 2026-11-11
 
 ### Added

@@ -2,8 +2,8 @@ name: Release
 
 # A release starts from a maintainer-signed annotated tag `vX.Y.Z` on main.
 # verify -> gates -> build (Linux x64/arm64, macOS universal, Windows x64)
-# -> stage (inventory, SBOM, SHA256SUMS) -> publish (provenance, draft,
-# upload, check, publish). Nothing becomes public until every asset exists and
+# -> stage (inventory, SBOM, SHA256SUMS) -> packslip (signed release
+# manifest) -> publish (provenance, draft, upload, check, publish). Nothing becomes public until every asset exists and
 # matches SHA256SUMS; a failure leaves at most an unpublished draft.
 #
 # Every job checks out the run's own commit (github.sha). workflow_dispatch:
@@ -213,8 +213,74 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
+  # A packslip (https://packslip.dev) describes every installer: platform,
+  # format, digest and the `marque` command, so `mise` and `packslip install`
+  # can pick and verify the right file. A publishing run signs it keylessly as
+  # this workflow; it links each file's provenance, which publish attests. A
+  # dry run builds and verifies the same manifest with a throwaway key and
+  # records nothing in the public transparency log.
+  packslip:
     needs: [verify, stage]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-staged
+          path: release-assets
+
+      - name: Write the packslip manifest
+        id: manifest
+        run: |
+          version="$(jq -r .version src-tauri/tauri.conf.json)"
+          scripts/release/packslip-manifest.sh "$version" release-assets > release.toml
+          cat release.toml
+          echo "artifacts=$(scripts/release/expected-assets.sh "$version" | sed 's|^|release-assets/|' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+
+      - name: Create and verify with a throwaway key (dry run)
+        if: ${{ inputs.dry_run == true }}
+        env:
+          PACKSLIP_VERSION: 1.11.3
+          PACKSLIP_SHA256: 26efeca080b011c310f90bcd2f57cd78b4a364552831ed84f5216c7cba0932ad
+          ARTIFACTS: ${{ steps.manifest.outputs.artifacts }}
+        run: |
+          archive="packslip-v${PACKSLIP_VERSION}-linux-x64.tar.xz"
+          curl -fsSLO "https://github.com/jdx/packslip/releases/download/v${PACKSLIP_VERSION}/${archive}"
+          echo "${PACKSLIP_SHA256}  ${archive}" | sha256sum -c -
+          tar -xJf "$archive"
+          packslip="$PWD/packslip-v${PACKSLIP_VERSION}-linux-x64/packslip"
+          trial="$(mktemp -d)"
+          "$packslip" keygen --out "$trial/release.key"
+          "$packslip" create --manifest release.toml --key "$trial/release.key" --no-log --out "$trial/packslip"
+          read -ra files <<<"$ARTIFACTS"
+          checks=()
+          for f in "${files[@]}"; do checks+=(--artifact "$f"); done
+          "$packslip" verify "$trial/packslip/packslip.sigstore.json" --pubkey "$trial/release.pub" --allow-unlogged "${checks[@]}"
+
+      - name: Create, sign and verify the packslip
+        if: ${{ inputs.dry_run != true }}
+        id: packslip
+        uses: jdx/packslip@44e50e5f64551234b4a382d991bd7f7f7d021d06 # v1.11.3
+        with:
+          manifest: release.toml
+          artifacts: ${{ steps.manifest.outputs.artifacts }}
+          attest: link
+          upload: false
+
+      - if: ${{ inputs.dry_run != true }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packslip-bundle
+          path: ${{ steps.packslip.outputs.bundle }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [verify, stage, packslip]
     if: ${{ inputs.dry_run != true }}
     runs-on: ubuntu-24.04
     environment: release
@@ -233,6 +299,20 @@ jobs:
       - name: Check staged digests
         working-directory: release-assets
         run: sha256sum --quiet -c SHA256SUMS
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packslip-bundle
+          path: release-assets
+
+      # The packslip bundle joins the release: check the full inventory again
+      # and rewrite SHA256SUMS so it covers the bundle too.
+      - name: Seal the inventory
+        env:
+          ASSET_DIR: release-assets
+          VERSION: ${{ needs.verify.outputs.version }}
+          WITH_PACKSLIP: "true"
+        run: scripts/release/stage.sh
 
       # Provenance for every asset listed in SHA256SUMS, bound to this
       # repository, this workflow and the tagged commit.
