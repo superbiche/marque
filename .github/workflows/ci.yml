@@ -5,13 +5,9 @@ on:
     branches: [main]
   pull_request:
   # The release workflow calls this file as its gate, so a tag is released only
-  # from a tree that passes the same checks as a pull request.
+  # from a tree that passes the same checks as a pull request. A called run
+  # checks out the caller's commit, which is the one the release builds.
   workflow_call:
-    inputs:
-      ref:
-        description: "Commit to check (default: the triggering ref)"
-        required: false
-        type: string
 
 # Public repository: jobs run on GitHub-hosted runners only. Never point a job
 # at a self-hosted runner here — any fork can open a PR that executes on it.
@@ -27,8 +23,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -55,8 +49,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Install system dependencies
         run: |
@@ -97,8 +89,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
