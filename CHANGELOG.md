@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Fixed
+- Windows: the NSIS installer registers a `QuietUninstallString`, so `winget uninstall` and other package managers remove Marque silently instead of opening the interactive uninstaller.
+
 ## [0.4.9] - 2026-11-11
 
 ### Added
