@@ -3,6 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { tauri, onFolderChanged, type AnnotatedFolder, type TreeNode } from "@/lib/tauri";
 import { usePreferences } from "@/lib/preferences";
 import { sortTreeByModified } from "@/lib/fileTree";
+import { groupFolders, type FolderGroup } from "@/lib/folderGroups";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -10,8 +11,9 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
-import { ClipboardCopy, Plus, X, ChevronDown, ChevronRight, ChevronsDownUp, FileText, FolderOpen, FolderTree, Pin, PinOff, Search, Layers, List, Clock, ArrowDownAZ } from "lucide-react";
+import { ClipboardCopy, Plus, X, ChevronDown, ChevronRight, ChevronsDownUp, FileText, FolderOpen, FolderTree, Pin, PinOff, Search, Layers, List, Clock, ArrowDownAZ, Tag, TagX, Tags } from "lucide-react";
 import { FileTreeNode } from "@/components/FileTree";
+import { GroupLabelDialog } from "@/components/GroupLabelDialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -20,6 +22,7 @@ import {
 } from "@/components/ui/context-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { startFileDrag } from "@/lib/dragOut";
+import { notifyApp } from "@/components/Notifications";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -35,31 +38,11 @@ interface Props {
   onCopyPath: (filePath?: string) => void;
 }
 
-interface RepoGroup {
-  key: string;
-  label: string;
-  folders: AnnotatedFolder[];
-}
-
-function groupByRepo(folders: AnnotatedFolder[]): RepoGroup[] {
-  const map = new Map<string, RepoGroup>();
-  for (const f of folders) {
-    const key = f.repo_root ?? "__none__";
-    const label = f.repo_name ?? "(no repo)";
-    let group = map.get(key);
-    if (!group) {
-      group = { key, label, folders: [] };
-      map.set(key, group);
-    }
-    group.folders.push(f);
-  }
-  const groups = Array.from(map.values());
-  groups.sort((a, b) => {
-    if (a.key === "__none__") return 1;
-    if (b.key === "__none__") return -1;
-    return a.label.localeCompare(b.label);
-  });
-  return groups;
+interface GroupDialogState {
+  /** "Set group" or "Rename group". */
+  title: string;
+  folderIds: string[];
+  initialLabel: string;
 }
 
 export const FolderSidebar = memo(function FolderSidebar({
@@ -78,6 +61,7 @@ export const FolderSidebar = memo(function FolderSidebar({
   const [expandedDirs, setExpandedDirs] = useState<ReadonlySet<string>>(new Set());
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [groupDialog, setGroupDialog] = useState<GroupDialogState | null>(null);
   const treesRef = useRef(trees);
   const collapsedRef = useRef(collapsed);
   const folderIdsRef = useRef(new Set<string>());
@@ -199,57 +183,123 @@ export const FolderSidebar = memo(function FolderSidebar({
     await tauri.removeFolder(id);
   };
 
+  const existingLabels = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          folders
+            .map((f) => f.group?.trim())
+            .filter((label): label is string => label !== undefined && label !== ""),
+        ),
+      ).sort((a, b) => a.localeCompare(b)),
+    [folders],
+  );
+
+  const handleSetGroup = (f: AnnotatedFolder) => {
+    setGroupDialog({
+      title: "Set group",
+      folderIds: [f.id],
+      initialLabel: f.group?.trim() ?? "",
+    });
+  };
+
+  const handleRemoveFromGroup = async (id: string) => {
+    try {
+      await tauri.setFolderGroup([id], null);
+    } catch (err) {
+      console.error("failed to remove folder from group", err);
+      notifyApp("Could not remove the folder from its group.");
+    }
+  };
+
+  const handleRenameGroup = (group: FolderGroup) => {
+    setGroupDialog({
+      title: "Rename group",
+      folderIds: group.folders.map((f) => f.id),
+      initialLabel: group.label,
+    });
+  };
+
+  const handleGroupDialogSubmit = async (label: string) => {
+    const dialog = groupDialog;
+    setGroupDialog(null);
+    if (!dialog) return;
+    try {
+      await tauri.setFolderGroup(dialog.folderIds, label);
+    } catch (err) {
+      console.error("failed to set folder group", err);
+      notifyApp("Could not update the group label.");
+    }
+  };
+
   const renderFolder = (f: AnnotatedFolder) => {
     const tree = sortedTrees[f.id];
     const isCollapsed = collapsed[f.id];
+    const hasLabel = Boolean(f.group?.trim());
     return (
       <div key={f.id} id={`folder-${f.id}`} className="group/folder mb-1">
-        <div className="flex items-center justify-between gap-1 rounded px-1 py-0.5 hover:bg-accent">
-          <button
-            type="button"
-            onClick={() => setCollapsed((c) => ({ ...c, [f.id]: !c[f.id] }))}
-            className="flex flex-1 items-center gap-1 truncate text-left"
-          >
-            {isCollapsed ? (
-              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <div className="flex items-center justify-between gap-1 rounded px-1 py-0.5 hover:bg-accent">
+              <button
+                type="button"
+                onClick={() => setCollapsed((c) => ({ ...c, [f.id]: !c[f.id] }))}
+                className="flex flex-1 items-center gap-1 truncate text-left"
+              >
+                {isCollapsed ? (
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate text-xs font-semibold">{f.name}</span>
+              </button>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    onClick={() => handleCollapseAll(f.path)}
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "h-5 w-5 opacity-0 transition-opacity",
+                      "group-hover/folder:opacity-100"
+                    )}
+                  >
+                    <ChevronsDownUp className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Collapse all</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    onClick={() => handleRemove(f.id)}
+                    variant="ghost"
+                    size="icon"
+                    className={cn(
+                      "h-5 w-5 opacity-0 transition-opacity",
+                      "group-hover/folder:opacity-100"
+                    )}
+                  >
+                    <X className="h-3 w-3" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="right">Remove from list</TooltipContent>
+              </Tooltip>
+            </div>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuItem onSelect={() => handleSetGroup(f)}>
+              <Tag />
+              Set group…
+            </ContextMenuItem>
+            {hasLabel && (
+              <ContextMenuItem onSelect={() => void handleRemoveFromGroup(f.id)}>
+                <TagX />
+                Remove from group
+              </ContextMenuItem>
             )}
-            <span className="truncate text-xs font-semibold">{f.name}</span>
-          </button>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                onClick={() => handleCollapseAll(f.path)}
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "h-5 w-5 opacity-0 transition-opacity",
-                  "group-hover/folder:opacity-100"
-                )}
-              >
-                <ChevronsDownUp className="h-3 w-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">Collapse all</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                onClick={() => handleRemove(f.id)}
-                variant="ghost"
-                size="icon"
-                className={cn(
-                  "h-5 w-5 opacity-0 transition-opacity",
-                  "group-hover/folder:opacity-100"
-                )}
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="right">Remove from list</TooltipContent>
-          </Tooltip>
-        </div>
+          </ContextMenuContent>
+        </ContextMenu>
         {!isCollapsed && tree && (
           <FileTreeNode
             node={tree}
@@ -267,7 +317,7 @@ export const FolderSidebar = memo(function FolderSidebar({
     );
   };
 
-  const groups = groupByRepo(folders);
+  const groups = groupFolders(folders);
 
   return (
     <div className="flex h-full w-full shrink-0 flex-col border-r bg-card">
@@ -393,7 +443,7 @@ export const FolderSidebar = memo(function FolderSidebar({
               </Button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              {sidebarGroupByRepo ? "Flat view" : "Group by repository"}
+              {sidebarGroupByRepo ? "Flat view" : "Group folders"}
             </TooltipContent>
           </Tooltip>
           <Tooltip>
@@ -424,19 +474,29 @@ export const FolderSidebar = memo(function FolderSidebar({
                     setCollapsedGroups((c) => ({ ...c, [group.key]: !open }))
                   }
                 >
-                  <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-accent">
-                    {collapsedGroups[group.key] ? (
-                      <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
-                    )}
-                    <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                      {group.label}
-                    </span>
-                    <span className="ml-auto text-[10px] text-muted-foreground/60">
-                      {group.folders.length}
-                    </span>
-                  </CollapsibleTrigger>
+                  <ContextMenu>
+                    <ContextMenuTrigger asChild disabled={group.kind === "ungrouped"}>
+                      <CollapsibleTrigger className="flex w-full items-center gap-1.5 rounded px-1 py-1 text-left hover:bg-accent">
+                        {collapsedGroups[group.key] ? (
+                          <ChevronRight className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        )}
+                        <span className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                          {group.label}
+                        </span>
+                        <span className="ml-auto text-[10px] text-muted-foreground/60">
+                          {group.folders.length}
+                        </span>
+                      </CollapsibleTrigger>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      <ContextMenuItem onSelect={() => handleRenameGroup(group)}>
+                        <Tags />
+                        Rename group…
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                   <CollapsibleContent>
                     <div className="pl-1">
                       {group.folders.map(renderFolder)}
@@ -447,6 +507,16 @@ export const FolderSidebar = memo(function FolderSidebar({
             : folders.map(renderFolder)}
         </div>
       </ScrollArea>
+      <GroupLabelDialog
+        open={groupDialog !== null}
+        onOpenChange={(open) => {
+          if (!open) setGroupDialog(null);
+        }}
+        title={groupDialog?.title ?? "Set group"}
+        initialLabel={groupDialog?.initialLabel ?? ""}
+        suggestions={existingLabels}
+        onSubmit={(label) => void handleGroupDialogSubmit(label)}
+      />
     </div>
   );
 });

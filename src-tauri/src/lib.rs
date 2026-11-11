@@ -104,6 +104,7 @@ pub fn run() {
             commands::list_folders_grouped,
             commands::add_folder,
             commands::remove_folder,
+            commands::set_folder_group,
             commands::read_folder_tree,
             commands::search_files,
             commands::get_recent_files,

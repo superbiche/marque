@@ -10,6 +10,10 @@ pub struct Folder {
     pub path: String,
     #[serde(default)]
     pub added_at: String,
+    /// User-defined sidebar group label. Folders without a label keep the
+    /// automatic repository grouping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -217,6 +221,7 @@ mod tests {
             name: "x".into(),
             path: path.into(),
             added_at: "now".into(),
+            group: None,
         }
     }
 
@@ -423,5 +428,41 @@ mod tests {
         assert_eq!(settings.content_zoom, None);
         assert_eq!(settings.content_width, None);
         assert_eq!(settings.content_font, None);
+    }
+
+    #[test]
+    fn loads_folder_without_group_key_as_none() {
+        let dir = tempdir().unwrap();
+        let raw = r#"{"folders":[{"id":"f1","name":"a","path":"/tmp/a","added_at":"0"}]}"#;
+        std::fs::write(dir.path().join(FILE_NAME), raw).unwrap();
+
+        let settings = Settings::load_with_status(dir.path()).unwrap().settings;
+
+        assert_eq!(settings.folders[0].group, None);
+    }
+
+    #[test]
+    fn folder_without_group_serializes_without_key() {
+        let dir = tempdir().unwrap();
+        let mut s = Settings::default();
+        s.add_folder(folder("f1", "/tmp/a"));
+        s.save(dir.path()).unwrap();
+
+        let raw = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(!raw.contains("\"group\""));
+    }
+
+    #[test]
+    fn folder_group_round_trips() {
+        let dir = tempdir().unwrap();
+        let mut s = Settings::default();
+        let mut f = folder("f1", "/tmp/a");
+        f.group = Some("Plans".into());
+        s.add_folder(f);
+        s.save(dir.path()).unwrap();
+
+        let loaded = Settings::load_with_status(dir.path()).unwrap().settings;
+        assert_eq!(loaded.folders[0].group, Some("Plans".into()));
+        assert!(std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap().contains("\"group\""));
     }
 }
