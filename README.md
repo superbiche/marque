@@ -112,7 +112,7 @@ To make `marque FILE` return to the prompt immediately instead of holding the te
 
 | Platform | Command |
 |---|---|
-| macOS ([Homebrew tap](https://github.com/superbiche/homebrew-tap)) | `brew tap superbiche/tap && brew trust superbiche/tap && brew install --cask superbiche/tap/marque` |
+| macOS ([Homebrew tap](https://github.com/superbiche/homebrew-tap)) | `brew tap superbiche/tap`, then `brew trust superbiche/tap` (Homebrew 6 and later), then `brew install --cask superbiche/tap/marque` |
 | Windows ([Scoop bucket](https://github.com/superbiche/scoop-bucket)) | `scoop bucket add superbiche https://github.com/superbiche/scoop-bucket` then `scoop install superbiche/marque` |
 | Linux, the `marque` command only, from 0.4.9 ([mise](https://mise.jdx.dev) with [packslip](https://packslip.dev)) | `mise use -g packslip:github.com/superbiche/marque` |
 
