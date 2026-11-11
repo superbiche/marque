@@ -5,7 +5,9 @@
 [advisories]
 ignore = [
   # quick-xml 0.39.x via wayland-scanner (proc-macro, build time only) and
-  # quick-xml 0.38.x via plist, which tauri compiles only on non-Linux targets.
+  # quick-xml 0.38.x via plist: used at compile time (tauri-macros) on every
+  # target, and linked at runtime by tauri on macOS (shipped since 0.4.8);
+  # marque never passes it the documents it opens.
   "RUSTSEC-2026-0194",
   "RUSTSEC-2026-0195",
 ]

@@ -104,7 +104,7 @@ sudo apt install ./Marque_*_amd64.deb
 
 To make `marque FILE` return to the prompt immediately instead of holding the terminal, install the CLI wrapper: download [`scripts/install-cli.sh`](scripts/install-cli.sh), read it, and run it; it only writes a small wrapper to `~/.local/bin/marque`.
 
-**macOS.** The app is ad-hoc signed but not notarized (no Apple Developer ID yet), so Gatekeeper blocks the first launch: open it once from Finder with right-click → Open, or allow it in System Settings → Privacy & Security → Open Anyway. If macOS reports that the app "is damaged", first check the download (see [Verifying a release](#verifying-a-release)); a verified, un-notarized download is usually only quarantined, which `xattr -dr com.apple.quarantine /Applications/Marque.app` clears. For the CLI: `ln -s /Applications/Marque.app/Contents/MacOS/marque /usr/local/bin/marque`.
+**macOS.** The app is ad-hoc signed but not notarized (no Apple Developer ID yet), so Gatekeeper blocks the first launch: try to open it once, then allow it in System Settings → Privacy & Security → Open Anyway (on macOS 14 and earlier, right-click → Open in Finder also works). If macOS reports that the app "is damaged", first check the download (see [Verifying a release](#verifying-a-release)); a verified, un-notarized download is usually only quarantined, which `xattr -dr com.apple.quarantine /Applications/Marque.app` clears. For the CLI: `ln -s /Applications/Marque.app/Contents/MacOS/marque /usr/local/bin/marque`.
 
 **Windows.** The installers are not code-signed yet, so SmartScreen may warn on first run (More info → Run anyway). Add the install directory to `PATH` to use `marque FILE` from a terminal.
 
