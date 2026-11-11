@@ -28,4 +28,6 @@ gh attestation verify Marque_${VERSION}_amd64.deb \\
 # 3. Checksums
 sha256sum --ignore-missing -c SHA256SUMS
 \`\`\`
+
+\`packslip.sigstore.json\` is a [packslip](https://packslip.dev) signed by this repository's release workflow: it describes each installer's platform, format and digest. \`packslip verify packslip.sigstore.json --artifact Marque_${VERSION}_amd64.deb\` checks a download against it, and \`mise use -g packslip:github.com/$GITHUB_REPOSITORY\` installs the \`marque\` command (the Linux AppImage) from it.
 NOTES
