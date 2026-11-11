@@ -1,6 +1,6 @@
 [package]
 name = "marque"
-version = "0.4.8"
+version = "0.4.9"
 description = "A fast desktop markdown viewer with folder workspaces"
 authors = ["Michel Tomas"]
 edition = "2021"

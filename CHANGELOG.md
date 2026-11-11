@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.9] - 2026-11-11
 
 ### Added
 - Package managers: a Homebrew tap (`brew install --cask superbiche/tap/marque`, the app plus the `marque` command) and a Scoop bucket (`scoop install superbiche/marque`). Both update themselves from each release after checking its build provenance and installing it on a macOS or Windows runner.
