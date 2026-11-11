@@ -6,9 +6,9 @@
   <br>
 </h1>
 
-<h4 align="center">A fast, native markdown viewer for Linux built with <a href="https://v2.tauri.app">Tauri v2</a>, <a href="https://react.dev">React</a>, and <a href="https://github.com/markdown-it/markdown-it">markdown-it</a>. Beautiful rendering of tables, code blocks, task lists, footnotes, and Mermaid diagrams — with live reload.</h4>
+<h4 align="center">A fast, native markdown viewer for Linux, macOS and Windows built with <a href="https://v2.tauri.app">Tauri v2</a>, <a href="https://react.dev">React</a>, and <a href="https://github.com/markdown-it/markdown-it">markdown-it</a>. Beautiful rendering of tables, code blocks, task lists, footnotes, and Mermaid diagrams — with live reload.</h4>
 
-Hard fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV, Apache-2.0.
+An independently maintained fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV (Apache-2.0), with continued releases. Not affiliated with or endorsed by marky's author.
 
 <p align="center">
   <a href="https://github.com/superbiche/marque/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/superbiche/marque/actions/workflows/ci.yml/badge.svg?branch=main"></a>
@@ -41,7 +41,7 @@ Hard fork of [marky](https://github.com/GRVYDEV/marky) by GRVYDEV, Apache-2.0.
 
 Marque is a desktop markdown viewer designed for one thing: opening `.md` files from the terminal and getting beautiful, instant rendering. Launch it with `marque FILENAME` to view a file or `marque FOLDER` to open a folder as a persistent workspace (Obsidian-style). Files reload live as they change on disk, which makes it a good companion for plans and notes written by coding agents while they are being written.
 
-Marque started as a hard fork of [marky](https://github.com/GRVYDEV/marky) because the upstream AppImage crashed on Fedora / KDE / Wayland. It is now maintained independently, Linux-first, with its own feature set.
+Marque started as a hard fork of [marky](https://github.com/GRVYDEV/marky) because the upstream AppImage crashed on Fedora / KDE / Wayland. It is now maintained independently, with its own feature set and signed, verifiable releases for Linux, macOS and Windows. It credits marky's authors and the upstream contributors whose changes it carries (see [`CHANGELOG.md`](CHANGELOG.md) and [`NOTICE`](NOTICE)); marky's author has not endorsed it, and support for marque happens here, not upstream.
 
 ### Features
 
@@ -108,9 +108,19 @@ To make `marque FILE` return to the prompt immediately instead of holding the te
 
 **Windows.** The installers are not code-signed yet, so SmartScreen may warn on first run (More info → Run anyway). Add the install directory to `PATH` to use `marque FILE` from a terminal.
 
+### Package managers
+
+| Platform | Command |
+|---|---|
+| macOS ([Homebrew tap](https://github.com/superbiche/homebrew-tap)) | `brew tap superbiche/tap && brew trust superbiche/tap && brew install --cask superbiche/tap/marque` |
+| Windows ([Scoop bucket](https://github.com/superbiche/scoop-bucket)) | `scoop bucket add superbiche https://github.com/superbiche/scoop-bucket` then `scoop install superbiche/marque` |
+| Linux, the `marque` command only, from 0.4.9 ([mise](https://mise.jdx.dev) with [packslip](https://packslip.dev)) | `mise use -g packslip:github.com/superbiche/marque` |
+
+The tap and the bucket update themselves from each release only after checking its build provenance. Through mise, Linux gets the AppImage as the `marque` command, verified against the release's signed packslip, without desktop integration; use the deb or rpm for the file manager entry.
+
 ### Verifying a release
 
-Release tags are signed by the maintainer, and the release workflow refuses any tag that is not. Each release lists every asset in `SHA256SUMS`, includes an SPDX SBOM, and attaches GitHub build provenance to every file, `SHA256SUMS` included; its notes give the exact commands (the signer's fingerprint check, `gh attestation verify`, `sha256sum -c`).
+Release tags are signed by the maintainer, and the release workflow refuses any tag that is not. Each release lists every asset in `SHA256SUMS`, includes an SPDX SBOM, and attaches GitHub build provenance to every file, `SHA256SUMS` included. From 0.4.9 it also carries `packslip.sigstore.json`, a [packslip](https://packslip.dev) signed by the release workflow that describes each installer's platform, format and digest. The release notes give the exact commands (the signer's fingerprint check, `gh attestation verify`, `sha256sum -c`, `packslip verify`).
 
 ### From Source (Fedora / Linux)
 
