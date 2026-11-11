@@ -39,6 +39,14 @@ jobs:
       - name: Tauri crate/npm versions
         run: node scripts/check-tauri-versions.mjs
 
+      # The release workflow runs these directly; a dry run never reaches
+      # publish.sh, so its mode is checked here (v0.4.7 failed on it).
+      - name: Release scripts are executable
+        run: |
+          for f in scripts/release/*.sh; do
+            [ -x "$f" ] || { echo "::error file=$f::$f is not executable (git update-index --chmod=+x $f)"; exit 1; }
+          done
+
       - name: Typecheck
         run: pnpm typecheck
 
