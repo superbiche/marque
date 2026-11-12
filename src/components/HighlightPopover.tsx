@@ -1,5 +1,5 @@
 import * as React from "react";
-import { HIGHLIGHT_COLOURS, type HighlightColour } from "@/lib/highlights";
+import { HIGHLIGHT_COLOURS, MAX_NOTE_LENGTH, type HighlightColour } from "@/lib/highlights";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
 
@@ -173,7 +173,8 @@ export function HighlightPopover({
           </button>
         </>
       ) : (
-        <>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-1">
           <span
             aria-hidden
             className="marque-highlight-swatch h-4 w-4 shrink-0 rounded-sm border border-border/60"
@@ -184,7 +185,8 @@ export function HighlightPopover({
             ref={inputRef}
             type="text"
             value={note}
-            onChange={(e) => setNote(e.target.value)}
+            // F6: clamp at the shared limit (the store refuses longer notes).
+            onChange={(e) => setNote(e.target.value.slice(0, MAX_NOTE_LENGTH))}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -202,7 +204,13 @@ export function HighlightPopover({
           >
             Save
           </button>
-        </>
+          </div>
+          {note.length >= MAX_NOTE_LENGTH && (
+            <div className="text-[10px] text-muted-foreground">
+              Notes are limited to {MAX_NOTE_LENGTH} characters.
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

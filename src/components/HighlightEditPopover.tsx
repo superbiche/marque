@@ -1,5 +1,5 @@
 import * as React from "react";
-import { HIGHLIGHT_COLOURS, type Highlight, type HighlightColour } from "@/lib/highlights";
+import { HIGHLIGHT_COLOURS, MAX_NOTE_LENGTH, type Highlight, type HighlightColour } from "@/lib/highlights";
 import { Trash2, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -215,11 +215,17 @@ export function HighlightEditPopover({
           <textarea
             ref={inputRef}
             value={draftNote}
-            onChange={(e) => setDraftNote(e.target.value)}
+            // F6: clamp at the shared limit (the store refuses longer notes).
+            onChange={(e) => setDraftNote(e.target.value.slice(0, MAX_NOTE_LENGTH))}
             placeholder="Note for this highlight…"
             rows={3}
             className="rounded-sm border bg-background px-1.5 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
           />
+          {draftNote.length >= MAX_NOTE_LENGTH && (
+            <div className="text-[10px] text-muted-foreground">
+              Notes are limited to {MAX_NOTE_LENGTH} characters.
+            </div>
+          )}
           <div className="flex justify-end gap-1 text-[10px]">
             <button
               type="button"

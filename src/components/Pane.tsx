@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { PaneState, TabState } from "@/lib/workspace";
+import type { PanelEntry } from "@/lib/highlights";
 import { TabBar } from "@/components/TabBar";
 import { Viewer } from "@/components/Viewer";
 import { DocSearch } from "@/components/DocSearch";
@@ -24,6 +25,11 @@ interface Props {
    * Called after every render completion and when the active tab empties.
    */
   onArticleChange?: (paneId: string, el: HTMLElement | null) => void;
+  /**
+   * Reports a document's panel projection (the review panel's rows) to the
+   * app whenever the Viewer applies a highlight resolution.
+   */
+  onResolutionChange?: (path: string, entries: PanelEntry[]) => void;
   onRevealFile: (filePath?: string) => void;
   onCopyContent: (source?: string) => void;
   onCopyPath: (filePath?: string) => void;
@@ -46,6 +52,7 @@ export const Pane = memo(function Pane({
   onFragmentHandled,
   onContentRendered,
   onArticleChange,
+  onResolutionChange,
   onRevealFile,
   onCopyContent,
   onCopyPath,
@@ -117,6 +124,7 @@ export const Pane = memo(function Pane({
             onOpenLink={onOpenLink}
             fragment={fragment}
             onFragmentHandled={onFragmentHandled}
+            onResolutionChange={onResolutionChange}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">

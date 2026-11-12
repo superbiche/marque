@@ -13,6 +13,7 @@ import { CommandPalette } from "@/components/CommandPalette";
 import { HighlightsPanel } from "@/components/HighlightsPanel";
 import { Notifications, notifyApp } from "@/components/Notifications";
 import { HighlightsProvider, useHighlights } from "@/lib/highlightsStore";
+import type { PanelEntry } from "@/lib/highlights";
 import {
   tauri,
   onCliTarget,
@@ -69,6 +70,11 @@ function AppShell() {
   // Per-pane registry of rendered article elements, so the highlight panel's
   // jump dispatches `marque:scroll-to-highlight` on the right pane's article.
   const [articles, setArticles] = useState<Map<string, HTMLElement>>(new Map());
+  // Per-document panel projection: the rows the review panel shows, published
+  // by the Viewer from the very resolution it applies (F4 — the panel never
+  // re-derives rows from the live DOM, so it can't show a fresh highlight
+  // as orphaned or with stale text).
+  const [resolutions, setResolutions] = useState<Map<string, PanelEntry[]>>(new Map());
   // True once a pin/unpin response has been applied — from then on the
   // backend-returned lists are authoritative over the initial load.
   const pinsMutatedRef = useRef(false);
@@ -91,6 +97,7 @@ function AppShell() {
     updateHighlight,
     lastDeleted,
     undoDelete,
+    flush,
   } = useHighlights();
 
   const activeTab = getActiveTab(state);
@@ -224,6 +231,33 @@ function AppShell() {
       return next;
     });
   }, []);
+
+  const handleResolutionChange = useCallback((path: string, entries: PanelEntry[]) => {
+    setResolutions((prev) => {
+      if (prev.get(path) === entries) return prev;
+      const next = new Map(prev);
+      next.set(path, entries);
+      return next;
+    });
+  }, []);
+
+  // F7: when a document's last tab closes, flush the pending saves
+  // (fire-and-forget; the window-close flush in the store is the awaited
+  // version). One tab per file, so a closed tab whose path no longer
+  // appears in any tab is the document's last.
+  const prevTabsRef = useRef<Record<string, TabState>>(state.tabs);
+  useEffect(() => {
+    const prev = prevTabsRef.current;
+    prevTabsRef.current = state.tabs;
+    for (const id of Object.keys(prev)) {
+      if (state.tabs[id]) continue;
+      const path = prev[id]?.filePath;
+      if (!path) continue;
+      const stillOpen = Object.values(state.tabs).some((t) => t.filePath === path);
+      if (stillOpen) continue;
+      void flush().catch(() => {});
+    }
+  }, [state.tabs, flush]);
 
   const handlePrint = useCallback(async () => {
     if (printingRef.current) return;
@@ -523,6 +557,7 @@ function AppShell() {
         onFragmentHandled={handleFragmentHandled}
         onContentRendered={handleContentRendered}
         onArticleChange={handleArticleChange}
+        onResolutionChange={handleResolutionChange}
         onRevealFile={handleRevealFile}
         onCopyContent={handleCopyContent}
         onCopyPath={handleCopyPath}
@@ -617,8 +652,7 @@ function AppShell() {
             return (
               <HighlightsPanel
                 filePath={activeTab?.filePath}
-                highlights={panelKey ? byFile[panelKey] ?? [] : []}
-                article={articles.get(state.activePaneId) ?? null}
+                entries={panelKey ? resolutions.get(panelKey) ?? [] : []}
                 activeColour={activeColour}
                 onSetActive={setActiveColour}
                 onClose={() => setPanelOpen(false)}

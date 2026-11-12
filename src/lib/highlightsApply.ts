@@ -13,10 +13,10 @@
  */
 
 import {
-  blockText,
   isInCodeBlock,
-  rawToNormMap,
+  mapInverse,
   type Highlight,
+  type MappedBlock,
   type Resolution,
   type ResolvedHighlight,
 } from "@/lib/highlights";
@@ -48,21 +48,19 @@ export function clearAllHighlights(container: HTMLElement): void {
  * selection as closely as the normalization allows.
  */
 function rawRangeOf(
-  block: HTMLElement,
-  container: HTMLElement,
+  block: MappedBlock,
   start: number,
   end: number,
 ): [number, number] | null {
-  const raw = blockText(block, container);
-  const map = rawToNormMap(raw);
-  const collapsedLen = map[map.length - 1];
-  if (start < 0 || end > collapsedLen || end <= start) return null;
-  const inv: (number | undefined)[] = new Array(collapsedLen);
-  for (let i = 0; i < raw.length; i++) {
-    if (inv[map[i]] === undefined) inv[map[i]] = i;
-  }
-  const rawStart = start < collapsedLen ? (inv[start] ?? raw.length) : raw.length;
-  const rawEnd = end < collapsedLen ? (inv[end] ?? raw.length) : raw.length;
+  const map = block.map;
+  const normLen = map.text.length;
+  if (start < 0 || end > normLen || end <= start) return null;
+  // `mapInverse` is the unit-boundary inverse of the single raw ->
+  // normalized map, so a window that spans a composed (NFC) or collapsed
+  // sequence wraps exactly the raw characters that produced it — including
+  // a composed character's combining marks when the window ends on it.
+  const rawStart = mapInverse(map, start);
+  const rawEnd = mapInverse(map, end);
   if (rawEnd <= rawStart) return null;
   return [rawStart, rawEnd];
 }
@@ -126,12 +124,7 @@ export function applyResolvedHighlight(
   container: HTMLElement,
   h: ResolvedHighlight,
 ): boolean {
-  const rawRange = rawRangeOf(
-    h.block.element,
-    container,
-    h.startOffset,
-    h.startOffset + h.length,
-  );
+  const rawRange = rawRangeOf(h.block, h.startOffset, h.startOffset + h.length);
   if (!rawRange) return false;
   const [start, end] = rawRange;
   const ranges = textNodeRanges(h.block.element, container, start, end);

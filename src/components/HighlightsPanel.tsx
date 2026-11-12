@@ -2,14 +2,13 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import {
   HIGHLIGHT_COLOURS,
+  MAX_NOTE_LENGTH,
   formatExportItem,
   formatExportList,
-  sectionHeadingForRange,
   type ExportItem,
-  type Highlight,
   type HighlightColour,
+  type PanelEntry,
 } from "@/lib/highlights";
-import { passageText } from "@/lib/highlightsApply";
 import { copyText } from "@/lib/clipboard";
 import { Copy, Trash2, X, Pencil, Check, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -78,10 +77,13 @@ function CopyButton({
 interface Props {
   /** The document the panel lists; undefined when no file-backed tab is active. */
   filePath: string | undefined;
-  /** This document's highlights, as stored (path is the map key, not the item). */
-  highlights: Highlight[];
-  /** The rendered article of the active pane; null when none is available. */
-  article: HTMLElement | null;
+  /**
+   * This document's rows, published by the Viewer from the very highlight
+   * resolution it applies — so the panel, the copy/export actions, and the
+   * DOM wrap always agree. Never re-derived from the live DOM (that used to
+   * race the wrapping effect and show fresh highlights orphaned or stale).
+   */
+  entries: PanelEntry[];
   activeColour: HighlightColour;
   onSetActive: (c: HighlightColour) => void;
   onClose: () => void;
@@ -111,7 +113,9 @@ function NoteEditor({ initial, onCommit, onCancel }: NoteEditorProps) {
       <textarea
         ref={ref}
         value={value}
-        onChange={(e) => setValue(e.target.value)}
+        // F6: clamp at the shared limit and say so — an over-limit note must
+        // not be silently truncated on save, and the store refuses it anyway.
+        onChange={(e) => setValue(e.target.value.slice(0, MAX_NOTE_LENGTH))}
         onKeyDown={(e) => {
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
@@ -125,6 +129,11 @@ function NoteEditor({ initial, onCommit, onCancel }: NoteEditorProps) {
         placeholder="Note…"
         className="rounded-sm border bg-background px-1.5 py-1 text-xs outline-none focus:ring-1 focus:ring-ring"
       />
+      {value.length >= MAX_NOTE_LENGTH && (
+        <div className="text-[10px] text-muted-foreground">
+          Notes are limited to {MAX_NOTE_LENGTH} characters.
+        </div>
+      )}
       <div className="flex justify-end gap-1">
         <button
           type="button"
@@ -147,16 +156,17 @@ function NoteEditor({ initial, onCommit, onCancel }: NoteEditorProps) {
 
 /**
  * Right-side review panel. Lists the active document's highlights grouped
- * by colour, with per-item passage and section label read from the live DOM
- * (never stored), per-item and per-group copy, and note editing. Highlights
- * whose passage can no longer be located in the document form their own
- * group and are never dropped automatically. A colour-filter pill row sits
- * in the header; clicking one filters to that colour, clicking again clears.
+ * by colour, with per-item passage and section label taken from the
+ * published resolution (post-relocation line range and normalized window —
+ * never re-read from the DOM, never stored). Per-item and per-group copy,
+ * and note editing. Highlights whose passage can no longer be located in
+ * the document form their own group and are never dropped automatically. A
+ * colour-filter pill row sits in the header; clicking one filters to that
+ * colour, clicking again clears.
  */
 export function HighlightsPanel({
   filePath,
-  highlights,
-  article,
+  entries,
   activeColour,
   onSetActive,
   onClose,
@@ -169,48 +179,50 @@ export function HighlightsPanel({
   const [filter, setFilter] = React.useState<HighlightColour | null>(null);
   const [editingId, setEditingId] = React.useState<string | null>(null);
 
-  // Live-DOM view of each highlight: the passage text is read from the
-  // rendered article at list time (null → orphaned) and the section label
-  // is the nearest heading above the anchor's line range.
-  const entries = React.useMemo(
+  // Rows in document order, exactly as the Viewer's resolution published
+  // them: `passage`/`section`/`lineRange` are the resolved values (orphan
+  // rows keep their original stored line range and have no passage).
+  const items = React.useMemo(
     () =>
-      highlights.map((h) => ({
-        h,
-        passage: article ? passageText(article, h.id) : null,
-        section: article ? sectionHeadingForRange(article, h.anchor.startLine, h.anchor.endLine) : "",
+      entries.map((e) => ({
+        h: e.highlight,
+        passage: e.passage,
+        section: e.section,
+        lineRange: e.lineRange,
+        orphaned: e.orphaned,
       })),
-    [highlights, article],
+    [entries],
   );
 
   const visible = React.useMemo(
-    () => (filter ? entries.filter((e) => e.h.colour === filter) : entries),
-    [filter, entries],
+    () => (filter ? items.filter((e) => e.h.colour === filter) : items),
+    [filter, items],
   );
 
   const grouped = React.useMemo(() => {
-    const out = new Map<HighlightColour, typeof entries>();
+    const out = new Map<HighlightColour, typeof items>();
     for (const c of HIGHLIGHT_COLOURS) out.set(c, []);
     for (const e of visible) {
-      if (e.passage !== null) out.get(e.h.colour)?.push(e);
+      if (!e.orphaned) out.get(e.h.colour)?.push(e);
     }
     return out;
   }, [visible]);
 
-  const orphans = React.useMemo(() => visible.filter((e) => e.passage === null), [visible]);
+  const orphans = React.useMemo(() => visible.filter((e) => e.orphaned), [visible]);
 
   const counts = React.useMemo(() => {
     const c = new Map<HighlightColour, number>();
     for (const colour of HIGHLIGHT_COLOURS) c.set(colour, 0);
-    for (const h of highlights) c.set(h.colour, (c.get(h.colour) ?? 0) + 1);
+    for (const e of items) c.set(e.h.colour, (c.get(e.h.colour) ?? 0) + 1);
     return c;
-  }, [highlights]);
+  }, [items]);
 
   const toExportItem = React.useCallback(
-    (e: (typeof entries)[number]): ExportItem => ({
+    (e: (typeof items)[number]): ExportItem => ({
       highlight: e.h,
       passage: e.passage,
       section: e.section,
-      lineRange: [e.h.anchor.startLine, e.h.anchor.endLine],
+      lineRange: e.lineRange,
     }),
     [],
   );
@@ -274,7 +286,7 @@ export function HighlightsPanel({
             filter === null ? "bg-foreground text-background" : "hover:bg-accent",
           )}
         >
-          All ({highlights.length})
+          All ({entries.length})
         </button>
         {HIGHLIGHT_COLOURS.map((c) => {
           const n = counts.get(c) ?? 0;
@@ -299,7 +311,7 @@ export function HighlightsPanel({
             </button>
           );
         })}
-        {highlights.length > 0 && (
+        {entries.length > 0 && (
           <CopyButton
             text={visibleText}
             successMessage={visibleCopyMessage}
@@ -336,7 +348,7 @@ export function HighlightsPanel({
           <div className="px-2 py-4 text-muted-foreground">
             No file open. Highlights are stored per document.
           </div>
-        ) : highlights.length === 0 ? (
+        ) : entries.length === 0 ? (
           <div className="px-2 py-4 text-muted-foreground">
             Select text in the document to start highlighting. Press 1–5 to
             apply a colour, click Annotate to attach a note.
@@ -452,7 +464,7 @@ export function HighlightsPanel({
                             data-highlight-colour={h.colour}
                           />
                           <span className="text-muted-foreground">
-                            Originally lines {h.anchor.startLine + 1}–{h.anchor.endLine}
+                            Originally lines {e.lineRange[0] + 1}–{e.lineRange[1]}
                           </span>
                         </div>
                         {h.note ? (

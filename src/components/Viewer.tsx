@@ -28,10 +28,13 @@ import {
   formatExportItem,
   newHighlightId,
   resolveAnchors,
+  resolutionToEntries,
   sectionHeadingForRange,
   type Highlight,
   type HighlightAnchor,
   type HighlightColour,
+  type PanelEntry,
+  type Resolution,
 } from "@/lib/highlights";
 import {
   HighlightPopover,
@@ -50,6 +53,12 @@ interface Props {
   onOpenLink: (path: string, fragment?: string) => void;
   fragment?: string;
   onFragmentHandled?: () => void;
+  /**
+   * Called with this document's panel projection (the rows the review panel
+   * should show) whenever a highlight resolution is applied. The panel is
+   * fed from these entries instead of re-deriving them from the DOM (F4).
+   */
+  onResolutionChange?: (path: string, entries: PanelEntry[]) => void;
 }
 
 const scrollMemory = new Map<string, number>();
@@ -68,6 +77,7 @@ export const Viewer = React.memo(function Viewer({
   onOpenLink,
   fragment,
   onFragmentHandled,
+  onResolutionChange,
 }: Props) {
   const internalRef = React.useRef<HTMLElement>(null);
   const ref = (articleRef ?? internalRef) as React.RefObject<HTMLElement | null>;
@@ -82,6 +92,8 @@ export const Viewer = React.memo(function Viewer({
     updateHighlight,
     removeHighlight,
     loadFile,
+    getLoadStatus,
+    highlightsKey,
   } = useHighlights();
   const cacheKey = createRenderCacheKey(filePath, source, resolved);
   const [renderState, setRenderState] = React.useState<RenderState>({
@@ -130,6 +142,22 @@ export const Viewer = React.memo(function Viewer({
     onRenderedRef.current = onRendered;
   }, [onRendered]);
 
+  const onResolutionChangeRef = React.useRef(onResolutionChange);
+  React.useEffect(() => {
+    onResolutionChangeRef.current = onResolutionChange;
+  }, [onResolutionChange]);
+
+  // The last panel projection applied for this document (F4). The
+  // "copy existing highlight" action uses it instead of reading the
+  // rendered spans, so it always matches what the panel shows.
+  const lastEntriesRef = React.useRef<PanelEntry[]>([]);
+
+  // The anchoring/relocation key, read through a ref: the effects below
+  // don't restart when it arrives — the re-apply effect below reruns on the
+  // state value instead (a rerun is exactly what a late key must trigger).
+  const highlightsKeyRef = React.useRef<Uint8Array | null>(highlightsKey);
+  highlightsKeyRef.current = highlightsKey;
+
   React.useEffect(() => {
     const cachedHtml = renderCache.get(cacheKey);
     setRenderState({
@@ -145,12 +173,36 @@ export const Viewer = React.memo(function Viewer({
     let cancelled = false;
 
     (async () => {
+      const rootEl = root as HTMLElement;
+
+      // F3 retry: a fresh render for a document whose read failed gets
+      // another attempt (no-op when the read already landed).
+      if (filePath) loadFile(filePath);
+
+      // Anchor/relayout only once the per-installation key and this
+      // document's read have both arrived (F3); the projection is empty
+      // until then, so the panel never shows stale rows for a fresh render.
+      const key = highlightsKeyRef.current;
+      const canApply =
+        key !== null &&
+        filePath !== undefined &&
+        getLoadStatus(filePath) === "loaded";
+      const publish = (resolution: Resolution | null) => {
+        if (!filePath) return; // the welcome document has no panel rows
+        const entries = resolution ? resolutionToEntries(rootEl, resolution) : [];
+        lastEntriesRef.current = entries;
+        onResolutionChangeRef.current?.(filePath, entries);
+      };
+
       if (renderState.isProcessed) {
-        attachCopyButtons(root as HTMLElement);
-        applyAllHighlights(
-          root as HTMLElement,
-          resolveAnchors(root as HTMLElement, fileHighlightsRef.current),
-        );
+        attachCopyButtons(rootEl);
+        if (canApply && key) {
+          const resolution = resolveAnchors(rootEl, fileHighlightsRef.current, key);
+          applyAllHighlights(rootEl, resolution);
+          publish(resolution);
+        } else {
+          publish(null);
+        }
         onRenderedRef.current?.();
         return;
       }
@@ -187,12 +239,15 @@ export const Viewer = React.memo(function Viewer({
       // completed Shiki/Mermaid markup first, then attach buttons to this DOM.
       // The snapshot deliberately carries no highlight spans — those come
       // from the live list and are (re)applied below and on every change.
-      renderCache.set(cacheKey, root.innerHTML);
-      attachCopyButtons(root as HTMLElement);
-      applyAllHighlights(
-        root as HTMLElement,
-        resolveAnchors(root as HTMLElement, fileHighlightsRef.current),
-      );
+      renderCache.set(cacheKey, rootEl.innerHTML);
+      attachCopyButtons(rootEl);
+      if (canApply && key) {
+        const resolution = resolveAnchors(rootEl, fileHighlightsRef.current, key);
+        applyAllHighlights(rootEl, resolution);
+        publish(resolution);
+      } else {
+        publish(null);
+      }
       onRenderedRef.current?.();
     })();
 
@@ -204,20 +259,30 @@ export const Viewer = React.memo(function Viewer({
   }, [cacheKey, html, renderState.isProcessed, renderState.key, resolved]);
 
   // Re-apply when this document's highlight list changes (add, recolour,
-  // note edit, remove, undo) or the article remounts (theme flip changes
-  // renderState.key). Scroll is preserved: removing a wrapper span the
-  // browser is using as its scroll anchor makes Chrome/Safari jump (often
-  // to the top) when scroll-anchoring fails to find a fallback.
+  // note edit, remove, undo), when the article remounts (theme flip changes
+  // renderState.key), or when the anchoring key arrives late. Scroll is
+  // preserved: removing a wrapper span the browser is using as its scroll
+  // anchor makes Chrome/Safari jump (often to the top) when scroll-anchoring
+  // fails to find a fallback.
   React.useEffect(() => {
     const root = ref.current;
     if (!root || !filePath) return;
+    const rootEl = root as HTMLElement;
+
+    // F3 retry: re-attempt a previously failed read (no-op when loaded or
+    // already in flight).
+    loadFile(filePath);
+    const key = highlightsKey;
+    if (!key || getLoadStatus(filePath) !== "loaded") return;
+
     withPreservedScroll(scrollerRef.current, () => {
-      applyAllHighlights(
-        root as HTMLElement,
-        resolveAnchors(root as HTMLElement, fileHighlights),
-      );
+      const resolution = resolveAnchors(rootEl, fileHighlights, key);
+      applyAllHighlights(rootEl, resolution);
+      const entries = resolutionToEntries(rootEl, resolution);
+      lastEntriesRef.current = entries;
+      onResolutionChangeRef.current?.(filePath, entries);
     });
-  }, [fileHighlights, filePath, renderState.key]);
+  }, [fileHighlights, filePath, renderState.key, highlightsKey, loadFile, getLoadStatus]);
 
   // Detect a text selection inside the article and surface the highlight
   // popover. `anchorFromSelection` is the single gate: it returns null for
@@ -239,7 +304,15 @@ export const Viewer = React.memo(function Viewer({
       // A fresh selection takes priority over any open edit popover.
       setEditPopover(null);
       const range = sel.getRangeAt(0);
-      const anchor = anchorFromSelection(range, root as HTMLElement);
+      // Anchoring needs the per-installation key, and creation is disabled
+      // until this document's read has landed (F3) — until then no popover.
+      const key = highlightsKeyRef.current;
+      if (!key || getLoadStatus(filePath) !== "loaded") {
+        setPopover(null);
+        pendingSelection.current = null;
+        return;
+      }
+      const anchor = anchorFromSelection(range, root as HTMLElement, key);
       if (!anchor) {
         setPopover(null);
         pendingSelection.current = null;
@@ -432,6 +505,21 @@ export const Viewer = React.memo(function Viewer({
   );
 
   const onCopyExisting = React.useCallback(async (h: Highlight): Promise<boolean> => {
+    const entry = lastEntriesRef.current.find((e) => e.highlight.id === h.id);
+    if (entry) {
+      // F8: the exported block uses the *resolved* position and passage
+      // the panel shows (post-relocation lines, normalized window), never
+      // the stale stored anchor.
+      const text = formatExportItem({
+        highlight: h,
+        passage: entry.passage,
+        section: entry.section,
+        lineRange: entry.lineRange,
+      });
+      return copyText(text, "Copied highlight");
+    }
+    // Fallback: no published projection yet (document still loading) —
+    // derive from the live DOM.
     const root = ref.current;
     if (!root) return false;
     const text = formatExportItem({

@@ -10,7 +10,7 @@ use anyhow::Context as _;
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct InitialTargetState(pub Mutex<InitialTarget>);
 
@@ -284,7 +284,16 @@ pub fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()
             highlights.len()
         )));
     }
-    for h in &highlights {
+    for (i, h) in highlights.iter().enumerate() {
+        // Structural validation (id, hash shape, ranges, timestamps). The
+        // error names only the category and the entry's position, never
+        // its values — they are attacker-controllable strings.
+        if let Some(problem) = crate::highlights::entry_problem(h) {
+            return Err(AppError::Invalid(format!(
+                "invalid highlight entry #{i}: {problem} (line {}, offset {})",
+                h.anchor.start_line, h.anchor.start_offset
+            )));
+        }
         if let Some(note) = &h.note {
             if note.chars().count() > MAX_NOTE_CHARS {
                 return Err(AppError::Invalid(format!(
@@ -297,6 +306,29 @@ pub fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()
     // `HighlightsFile::update_path`) so rapid edits from two panes cannot
     // lose each other's update.
     HighlightsFile::update_path(&settings_dir(), path, highlights)
+}
+
+/// The per-installation 128-bit SipHash key as 32 lowercase hex
+/// characters. Created on first call at `<settings_dir>/highlights.key`
+/// (mode 0600 on Unix); the key never appears in `highlights.json`.
+#[tauri::command]
+pub fn get_highlights_key() -> AppResult<String> {
+    crate::highlights::get_key(&settings_dir())
+}
+
+/// Final word on a close request: the frontend calls this after awaiting
+/// its highlights flush (see the `highlights://flush-request` event), which
+/// destroys the main window. A 2-second Rust-side timer destroys the window
+/// if no confirmation arrives, so this command must only be called by our
+/// own webview.
+#[tauri::command]
+pub fn confirm_close(app: AppHandle) -> AppResult<()> {
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .destroy()
+            .map_err(|e| AppError::Other(anyhow::anyhow!("destroying the main window: {e}")))?;
+    }
+    Ok(())
 }
 
 /// All document paths that currently have at least one highlight, sorted

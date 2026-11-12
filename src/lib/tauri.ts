@@ -78,6 +78,17 @@ export const tauri = {
   saveHighlights: (path: string, highlights: Highlight[]) =>
     invoke<void>("save_highlights", { path, highlights }),
   listHighlightedPaths: () => invoke<string[]>("list_highlighted_paths"),
+  /** The per-installation 128-bit key (32 lowercase hex) used to fingerprint
+   *  passage windows. Generated once on first use and stored in
+   *  `highlights.key`; it never appears in highlights.json. */
+  getHighlightsKey: () => invoke<string>("get_highlights_key"),
+  /**
+   * Final word on a window close: the backend intercepts the first close
+   * request, emits `highlights://flush-request` and waits (with a 2-second
+   * fallback). After awaiting its highlights flush the frontend calls this to
+   * let the close through. See `onHighlightsFlushRequest`.
+   */
+  confirmClose: () => invoke<void>("confirm_close"),
 };
 
 /**
@@ -115,6 +126,15 @@ export function onCliTarget(cb: (t: InitialTarget) => void): Promise<UnlistenFn>
 
 export function onFolderWatchLimit(cb: (limit: WatchLimit) => void): Promise<UnlistenFn> {
   return listen<WatchLimit>("folder://watch-limit", (e) => cb(e.payload));
+}
+
+/**
+ * Fired by the backend when the main window's first close request is
+ * intercepted so the frontend can flush pending highlights before the window
+ * is destroyed (see `confirmClose`). The payload is a no-op token.
+ */
+export function onHighlightsFlushRequest(cb: () => void): Promise<UnlistenFn> {
+  return listen("highlights://flush-request", () => cb());
 }
 
 /**
