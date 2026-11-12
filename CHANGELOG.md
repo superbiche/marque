@@ -14,6 +14,7 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 - macOS: a native menu bar (File, Edit, View, Window, Help) carries marque's actions and shortcuts; Linux and Windows are unchanged. (Remaining part of GRVYDEV/marky#15 by @cjthompson, adapted.)
 
 ### Fixed
+- macOS: printing (⌘P or the toolbar printer button) opens the print dialog. Tauri routes `window.print()` through its webview print command on macOS, which the app capability did not allow, so nothing happened.
 - The welcome page shows the split shortcuts as **⌘\\** and **⌘⇧\\**; the backslash used to escape the closing emphasis.
 - Windows: the NSIS installer registers a `QuietUninstallString`, so `winget uninstall` and other package managers remove Marque silently instead of opening the interactive uninstaller.
 
