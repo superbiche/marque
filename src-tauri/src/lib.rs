@@ -25,9 +25,8 @@ use watcher::{hydrate_folder, hydrate_folders, SharedWatchers, Watchers};
 const HIGHLIGHTS_FLUSH_EVENT: &str = "highlights://flush-request";
 
 /// Phases of the main window's close-request flow. The transitions are
-/// pure functions over this enum (below), so they are unit-testable
-/// without a window; the guard is a single mutex holding the current
-/// phase.
+/// pure functions over `(phase, cycle)` (below), so they are unit-testable
+/// without a window; the guard is a single mutex holding that pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClosePhase {
     /// No close in flight.
@@ -38,10 +37,10 @@ enum ClosePhase {
     /// The frontend acked the flush request; a save is in progress.
     Flushing,
     /// The frontend cancelled (its flush failed). The next close request
-    /// passes through: "close without saving". A new edit accepted in
-    /// this phase re-arms the guard through `rearm_close_guard` (back to
-    /// `Idle`), so a later close flushes those edits instead of
-    /// discarding them.
+    /// passes through: "close without saving". The next *accepted* edit
+    /// re-arms the guard to `Idle` through `handle_save_started` (driven
+    /// by the native `save_highlights` command), so a later close flushes
+    /// those edits instead of discarding them.
     DiscardAllowed,
     /// Terminal: destroy has been ordered (`confirm_close`, the 2 s
     /// no-ack fallback, or the 30 s ceiling).
@@ -72,119 +71,187 @@ enum FlushTimer {
     Ceiling,
 }
 
-/// Decide how to handle a new close request in `phase`, and the phase
+/// Decide how to handle a new close request in `state`, and the state
 /// that results.
 ///
 /// A close while `FlushRequested` or `Flushing` is intercepted again —
 /// the in-flight save must not be lost by a second close (the old guard
 /// passed a second close through once any close had been attempted,
-/// which destroyed the window mid-save). `DiscardAllowed` (a failed
-/// flush) lets a close through: "close without saving". `Closing` also
-/// passes — a failed `window.destroy()` leaves the window alive in
-/// `Closing` and no timer ever acts from there, so only a further OS
-/// close (the platform's own destruction attempt) can get out of it;
-/// the `on_destroy_result` recovery handles that.
-fn handle_close_request(phase: ClosePhase) -> (CloseAction, ClosePhase) {
-    match phase {
+/// which destroyed the window mid-save); the cycle is unchanged. The
+/// first close of a cycle (`Idle`) bumps `cycle`, which retires every
+/// timer still sleeping from a previous cycle (see `handle_timer`).
+/// `DiscardAllowed` (a failed flush) lets a close through: "close without
+/// saving". `Closing` also passes — a failed `window.destroy()` leaves
+/// the window alive in `Closing` and no timer ever acts from there, so
+/// only a further OS close (the platform's own destruction attempt) can
+/// get out of it; the `on_destroy_result` recovery handles that.
+fn handle_close_request(state: CloseState) -> (CloseAction, CloseState) {
+    match state.phase {
         ClosePhase::Idle => (
             CloseAction::Intercept { emit: true },
-            ClosePhase::FlushRequested,
+            CloseState {
+                phase: ClosePhase::FlushRequested,
+                cycle: state.cycle + 1,
+            },
         ),
         ClosePhase::FlushRequested | ClosePhase::Flushing => {
-            (CloseAction::Intercept { emit: false }, phase)
+            (CloseAction::Intercept { emit: false }, state)
         }
-        ClosePhase::DiscardAllowed | ClosePhase::Closing => (CloseAction::Pass, phase),
+        ClosePhase::DiscardAllowed | ClosePhase::Closing => (CloseAction::Pass, state),
     }
 }
 
-/// Decide whether `timer` firing in `phase` destroys the window, and the
-/// phase that results (a destroy moves to `Closing`).
+/// Decide whether `timer` firing in `state` destroys the window, and the
+/// state that results (a destroy moves to `Closing`).
+///
+/// A timer only acts while the current `cycle` is still the one it was
+/// started for (`timer_cycle`): a close that began, was cancelled, and
+/// whose window was then re-armed by a new edit (or destroyed) is a
+/// *later* cycle, so a stale no-ack or ceiling timer that wakes in the
+/// meantime is a no-op — it must not destroy a window whose in-flight
+/// state belongs to a different cycle.
 ///
 /// `NoAck` fires only from `FlushRequested`: the frontend is dead or the
 /// event was lost, so no flush is in flight. Once acked (`Flushing`) the
 /// 30 s ceiling governs instead. `DiscardAllowed` keeps the window open in
 /// either case — a cancelled (failed) flush must not be undone by a
 /// timer.
-fn handle_timer(timer: FlushTimer, phase: ClosePhase) -> (bool, ClosePhase) {
-    match (timer, phase) {
-        (FlushTimer::NoAck, ClosePhase::FlushRequested) => (true, ClosePhase::Closing),
-        (FlushTimer::Ceiling, ClosePhase::Flushing) => (true, ClosePhase::Closing),
-        _ => (false, phase),
+fn handle_timer(state: CloseState, timer: FlushTimer, timer_cycle: u64) -> (bool, CloseState) {
+    if state.cycle != timer_cycle {
+        return (false, state);
+    }
+    match (timer, state.phase) {
+        (FlushTimer::NoAck, ClosePhase::FlushRequested) => (
+            true,
+            CloseState {
+                phase: ClosePhase::Closing,
+                cycle: state.cycle,
+            },
+        ),
+        (FlushTimer::Ceiling, ClosePhase::Flushing) => (
+            true,
+            CloseState {
+                phase: ClosePhase::Closing,
+                cycle: state.cycle,
+            },
+        ),
+        _ => (false, state),
     }
 }
 
-/// The phase after the frontend acked the flush request. Only an ack in
+/// The state after the frontend acked the flush request. Only an ack in
 /// `FlushRequested` counts; a stale or duplicated ack in any other phase
-/// is a no-op (and starts no ceiling).
-fn handle_ack(phase: ClosePhase) -> ClosePhase {
-    match phase {
-        ClosePhase::FlushRequested => ClosePhase::Flushing,
-        other => other,
+/// is a no-op (and starts no ceiling). The cycle is unchanged: an ack
+/// belongs to the same close cycle the flush-request that started it.
+fn handle_ack(state: CloseState) -> CloseState {
+    match state.phase {
+        ClosePhase::FlushRequested => CloseState {
+            phase: ClosePhase::Flushing,
+            cycle: state.cycle,
+        },
+        _ => state,
     }
 }
 
-/// The phase after `confirm_close` (the flush has landed), and whether
+/// The state after `confirm_close` (the flush has landed), and whether
 /// the window should be destroyed now. Only from `Flushing` — or from
 /// `FlushRequested`, where the frontend skipped the ack but says the
 /// flush landed, which is data-safe to destroy. Never from
 /// `DiscardAllowed`: a flush that failed has told the user the window
-/// stays open, and a stray late confirm must not undo that.
-fn handle_confirm(phase: ClosePhase) -> (ClosePhase, bool) {
-    match phase {
-        ClosePhase::Flushing | ClosePhase::FlushRequested => (ClosePhase::Closing, true),
-        other => (other, false),
+/// stays open, and a stray late confirm must not undo that. The cycle is
+/// unchanged: a confirm belongs to the in-flight cycle.
+fn handle_confirm(state: CloseState) -> (CloseState, bool) {
+    match state.phase {
+        ClosePhase::Flushing | ClosePhase::FlushRequested => (
+            CloseState {
+                phase: ClosePhase::Closing,
+                cycle: state.cycle,
+            },
+            true,
+        ),
+        _ => (state, false),
     }
 }
 
-/// The phase after `cancel_close` (the flush failed: stay open, and let
+/// The state after `cancel_close` (the flush failed: stay open, and let
 /// the next close through — "close without saving"). Only from an
-/// in-flight flush cycle; a stale cancel is a no-op.
-fn handle_cancel(phase: ClosePhase) -> ClosePhase {
-    match phase {
-        ClosePhase::FlushRequested | ClosePhase::Flushing => ClosePhase::DiscardAllowed,
-        other => other,
+/// in-flight flush cycle; a stale cancel is a no-op. The cycle is
+/// unchanged: a cancel keeps the token so that, if the user closes again
+/// without editing, that close still passes (still `DiscardAllowed`); a
+/// new edit re-arms via `handle_save_started`, and the *next* close bumps
+/// the cycle and retires this one's timers.
+fn handle_cancel(state: CloseState) -> CloseState {
+    match state.phase {
+        ClosePhase::FlushRequested | ClosePhase::Flushing => CloseState {
+            phase: ClosePhase::DiscardAllowed,
+            cycle: state.cycle,
+        },
+        _ => state,
     }
 }
 
-/// The phase after a `window.destroy()` attempt in `phase`. A success
-/// leaves the phase alone (the window is gone; no further transition
+/// The state after a `window.destroy()` attempt in `state`. A success
+/// leaves the state alone (the window is gone; no further transition
 /// matters). A failure out of `Closing` moves to `DiscardAllowed`, so
 /// the next close request passes through instead of being trapped
 /// behind an un-destroyed window (a failed destroy must not leave the
 /// window uncloseable — "close without saving" recovers it). A failure
 /// from any other phase is a no-op: destroy is only ever ordered from
-/// `Closing`.
-fn on_destroy_result(phase: ClosePhase, ok: bool) -> ClosePhase {
-    if !ok && phase == ClosePhase::Closing {
-        ClosePhase::DiscardAllowed
+/// `Closing`. The cycle is unchanged.
+fn on_destroy_result(state: CloseState, ok: bool) -> CloseState {
+    if !ok && state.phase == ClosePhase::Closing {
+        CloseState {
+            phase: ClosePhase::DiscardAllowed,
+            cycle: state.cycle,
+        }
     } else {
-        phase
+        state
     }
 }
 
-/// The phase after `rearm_close_guard`: a new edit was accepted after a
-/// cancelled (failed) flush, so `DiscardAllowed` — "the next close passes
-/// through without saving" — must not outlive it: back to `Idle`, where
-/// the next close request intercepts and asks for a fresh flush. A
-/// stale rearm in any other phase is a no-op: it must not disturb an
-/// in-flight cycle or a window that is already closing.
-fn handle_rearm(phase: ClosePhase) -> ClosePhase {
-    match phase {
-        ClosePhase::DiscardAllowed => ClosePhase::Idle,
-        other => other,
+/// The state after `save_highlights` starts: an edit was accepted and
+/// queued a save, so the guard's `DiscardAllowed` — "the next close
+/// passes through without saving" — must not outlive that edit: back to
+/// `Idle`, where the next close request intercepts and asks for a fresh
+/// flush. Driven by the native `save_highlights` command (synchronously,
+/// before its blocking body) rather than a frontend handshake: every
+/// accepted edit queues a save immediately, so re-arming needs no
+/// round-trip and cannot race the close cycle. A save that starts in any
+/// other phase is a no-op: it must not disturb an in-flight flush cycle
+/// or a window that is already closing. The cycle is unchanged.
+fn handle_save_started(state: CloseState) -> CloseState {
+    match state.phase {
+        ClosePhase::DiscardAllowed => CloseState {
+            phase: ClosePhase::Idle,
+            cycle: state.cycle,
+        },
+        _ => state,
     }
+}
+
+/// The close cycle's phase and its token. `cycle` is bumped when a close
+/// starts a new flush (`Idle` → `FlushRequested`); every timer captures
+/// the `cycle` it was started for, so a timer that outlives its cycle is a
+/// no-op (see `handle_timer`) rather than a stale destroy. A
+/// `DiscardAllowed` (failed) flush, an in-flight flush, and a `Closing`
+/// window all keep the current token: only a *new* close request — the
+/// first one out of `Idle`, i.e. after a re-arm — starts a fresh cycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CloseState {
+    phase: ClosePhase,
+    cycle: u64,
 }
 
 /// Close-request state for the main window, shared with the frontend-ack
-/// flow through the `Arc` in managed state. A single mutex-held phase
-/// instead of four racing flags: every transition is a compare-and-swap
-/// decided by the pure `handle_*` functions above, so a second close
-/// during an in-flight flush is intercepted (not passed through) and a
-/// stale ack/confirm/cancel can no longer undo a decision. The main
-/// window is created once per process (this app never creates a
-/// replacement one), so the guard is per process.
+/// flow through the `Arc` in managed state. A single mutex-held
+/// `(phase, cycle)` instead of four racing flags: every transition is a
+/// compare-and-swap decided by the pure `handle_*` functions above, so a
+/// second close during an in-flight flush is intercepted (not passed
+/// through) and a stale ack/confirm/cancel/timer can no longer undo a
+/// decision. The main window is created once per process (this app never
+/// creates a replacement one), so the guard is per process.
 struct CloseGuard {
-    phase: Mutex<ClosePhase>,
+    state: Mutex<CloseState>,
 }
 
 /// Handle a new CLI target from either single-instance forwarding or macOS
@@ -269,11 +336,16 @@ pub fn run() {
             let Some(guard) = window.app_handle().try_state::<Arc<CloseGuard>>() else {
                 return;
             };
-            let action = {
-                let mut phase = guard.phase.lock();
-                let (a, n) = handle_close_request(*phase);
-                *phase = n;
-                a
+            let (action, cycle) = {
+                let mut state = guard.state.lock();
+                let (a, n) = handle_close_request(*state);
+                // The no-ack fallback is started for the cycle this close
+                // request began (a new one only out of `Idle`): capture
+                // the post-transition cycle so the timer acts only while
+                // that cycle is still current.
+                let c = n.cycle;
+                *state = n;
+                (a, c)
             };
             match action {
                 CloseAction::Intercept { emit } => {
@@ -287,17 +359,18 @@ pub fn run() {
                     // undelivered), destroy after 2 s. A plain OS thread
                     // avoids needing a tokio `time` dependency;
                     // `Window::destroy` is dispatcher-based and
-                    // thread-safe. The check at expiry is phase-aware: an
-                    // ack (`Flushing`) or a cancel (`DiscardAllowed`) in
-                    // the meantime suppresses it.
+                    // thread-safe. The check at expiry is phase- and
+                    // cycle-aware: an ack (`Flushing`) or a cancel
+                    // (`DiscardAllowed`) suppresses it, and a later close
+                    // cycle retires it (`handle_timer`).
                     let guard = Arc::clone(&*guard);
                     let window = window.clone();
                     std::thread::spawn(move || {
                         std::thread::sleep(std::time::Duration::from_secs(2));
                         let destroy = {
-                            let mut phase = guard.phase.lock();
-                            let (d, n) = handle_timer(FlushTimer::NoAck, *phase);
-                            *phase = n;
+                            let mut state = guard.state.lock();
+                            let (d, n) = handle_timer(*state, FlushTimer::NoAck, cycle);
+                            *state = n;
                             d
                         };
                         if destroy {
@@ -311,8 +384,8 @@ pub fn run() {
                                 eprintln!(
                                     "marque: could not destroy the main window (2 s no-ack fallback)"
                                 );
-                                let mut phase = guard.phase.lock();
-                                *phase = on_destroy_result(*phase, false);
+                                let mut state = guard.state.lock();
+                                *state = on_destroy_result(*state, false);
                             }
                         }
                     });
@@ -344,7 +417,10 @@ pub fn run() {
 
             app.manage(InitialTargetState(Mutex::new(initial_resolved)));
             app.manage(Arc::new(CloseGuard {
-                phase: Mutex::new(ClosePhase::Idle),
+                state: Mutex::new(CloseState {
+                    phase: ClosePhase::Idle,
+                    cycle: 0,
+                }),
             }));
             app.manage(loaded_settings.status);
             app.manage(Arc::clone(&registry));
@@ -391,7 +467,6 @@ pub fn run() {
             commands::ack_close_request,
             commands::confirm_close,
             commands::cancel_close,
-            commands::rearm_close_guard,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -418,18 +493,26 @@ pub fn run() {
 mod close_guard {
     use super::*;
 
+    /// Build a `CloseState` from a phase and an explicit cycle.
+    fn close_state(phase: ClosePhase, cycle: u64) -> CloseState {
+        CloseState { phase, cycle }
+    }
+
     #[test]
-    fn first_close_intercepts_and_requests_a_flush() {
-        let (action, next) = handle_close_request(ClosePhase::Idle);
+    fn first_close_intercepts_and_requests_a_flush_and_starts_a_new_cycle() {
+        let (action, next) = handle_close_request(close_state(ClosePhase::Idle, 7));
         assert_eq!(action, CloseAction::Intercept { emit: true });
-        assert_eq!(next, ClosePhase::FlushRequested);
+        // A new close request starts a new cycle, retiring any timer
+        // still sleeping from a previous one.
+        assert_eq!(next, close_state(ClosePhase::FlushRequested, 8));
     }
 
     #[test]
     fn a_second_close_while_waiting_for_the_ack_is_intercepted_again() {
-        let (action, next) = handle_close_request(ClosePhase::FlushRequested);
+        let (action, next) = handle_close_request(close_state(ClosePhase::FlushRequested, 3));
         assert_eq!(action, CloseAction::Intercept { emit: false });
-        assert_eq!(next, ClosePhase::FlushRequested);
+        // A re-intercepted close keeps the in-flight cycle.
+        assert_eq!(next, close_state(ClosePhase::FlushRequested, 3));
     }
 
     #[test]
@@ -437,16 +520,16 @@ mod close_guard {
         // The regression this exists to fix: the old guard let a second
         // close through once any close had been attempted, destroying the
         // window while an acknowledged save was still in flight.
-        let (action, next) = handle_close_request(ClosePhase::Flushing);
+        let (action, next) = handle_close_request(close_state(ClosePhase::Flushing, 3));
         assert_eq!(action, CloseAction::Intercept { emit: false });
-        assert_eq!(next, ClosePhase::Flushing);
+        assert_eq!(next, close_state(ClosePhase::Flushing, 3));
     }
 
     #[test]
     fn a_close_after_a_failed_flush_passes_through() {
-        let (action, next) = handle_close_request(ClosePhase::DiscardAllowed);
+        let (action, next) = handle_close_request(close_state(ClosePhase::DiscardAllowed, 3));
         assert_eq!(action, CloseAction::Pass);
-        assert_eq!(next, ClosePhase::DiscardAllowed);
+        assert_eq!(next, close_state(ClosePhase::DiscardAllowed, 3));
     }
 
     #[test]
@@ -456,76 +539,88 @@ mod close_guard {
         // is a no-op and the next close request was intercepted — the
         // window could never be closed again. Letting the request
         // through (the OS close then proceeds normally) is the recovery.
-        let (action, next) = handle_close_request(ClosePhase::Closing);
+        let (action, next) = handle_close_request(close_state(ClosePhase::Closing, 3));
         assert_eq!(action, CloseAction::Pass);
-        assert_eq!(next, ClosePhase::Closing);
+        assert_eq!(next, close_state(ClosePhase::Closing, 3));
     }
 
     #[test]
     fn a_failed_destroy_while_closing_allows_the_next_close() {
         assert_eq!(
-            on_destroy_result(ClosePhase::Closing, false),
-            ClosePhase::DiscardAllowed
+            on_destroy_result(close_state(ClosePhase::Closing, 3), false),
+            close_state(ClosePhase::DiscardAllowed, 3)
         );
     }
 
     #[test]
     fn a_succeeded_destroy_leaves_the_phase_alone() {
         assert_eq!(
-            on_destroy_result(ClosePhase::Closing, true),
-            ClosePhase::Closing
+            on_destroy_result(close_state(ClosePhase::Closing, 3), true),
+            close_state(ClosePhase::Closing, 3)
         );
     }
 
     #[test]
     fn a_failed_destroy_outside_closing_is_a_noop() {
         // Destroy is only ever ordered from `Closing`; a failure from
-        // any other phase is a no-op.
+        // any other phase is a no-op (and keeps the cycle).
         for phase in [
             ClosePhase::Idle,
             ClosePhase::FlushRequested,
             ClosePhase::Flushing,
             ClosePhase::DiscardAllowed,
         ] {
-            assert_eq!(on_destroy_result(phase, false), phase);
+            assert_eq!(on_destroy_result(close_state(phase, 3), false), close_state(phase, 3));
         }
     }
 
     #[test]
-    fn a_rearm_after_a_failed_flush_restores_protection() {
+    fn a_save_after_a_failed_flush_restores_protection() {
+        // The re-arm: a new edit's save moves `DiscardAllowed` (the
+        // "next close passes through without saving" phase) back to
+        // `Idle`, keeping the cycle, so a later close requests a fresh
+        // flush instead of discarding the new edits.
         assert_eq!(
-            handle_rearm(ClosePhase::DiscardAllowed),
-            ClosePhase::Idle
+            handle_save_started(close_state(ClosePhase::DiscardAllowed, 4)),
+            close_state(ClosePhase::Idle, 4)
         );
     }
 
     #[test]
-    fn a_stale_rearm_is_a_noop() {
+    fn a_save_in_any_other_phase_is_a_noop() {
+        // A save must not disturb an in-flight flush cycle or a window
+        // that is already closing (or an idle guard): the re-arm is
+        // specific to the `DiscardAllowed` (failed-flush) phase.
         for phase in [
             ClosePhase::Idle,
             ClosePhase::FlushRequested,
             ClosePhase::Flushing,
             ClosePhase::Closing,
         ] {
-            assert_eq!(handle_rearm(phase), phase);
+            assert_eq!(handle_save_started(close_state(phase, 4)), close_state(phase, 4));
         }
     }
 
     #[test]
-    fn a_close_after_rearm_intercepts_and_requests_a_flush_again() {
-        // The CodeRabbit third-pass regression: `DiscardAllowed` used to
-        // outlive new edits accepted after a cancelled close, so a later
-        // close discarded those edits without a flush. After re-arm the
-        // next close starts a fresh flush cycle.
-        let phase = handle_rearm(ClosePhase::DiscardAllowed);
-        let (action, next) = handle_close_request(phase);
+    fn a_close_after_a_save_intercepts_and_requests_a_flush_again() {
+        // The CodeRabbit regression: `DiscardAllowed` used to outlive new
+        // edits accepted after a cancelled close, so a later close
+        // discarded those edits without a flush. Re-arming via the save
+        // and then closing starts a fresh flush cycle (a new cycle
+        // number, which retires the previous cycle's timers).
+        let s = handle_save_started(close_state(ClosePhase::DiscardAllowed, 4));
+        let (action, next) = handle_close_request(s);
         assert_eq!(action, CloseAction::Intercept { emit: true });
-        assert_eq!(next, ClosePhase::FlushRequested);
+        assert_eq!(next, close_state(ClosePhase::FlushRequested, 5));
     }
 
     #[test]
     fn an_ack_moves_flush_requested_to_flushing() {
-        assert_eq!(handle_ack(ClosePhase::FlushRequested), ClosePhase::Flushing);
+        // An ack belongs to the same cycle the flush-request started.
+        assert_eq!(
+            handle_ack(close_state(ClosePhase::FlushRequested, 3)),
+            close_state(ClosePhase::Flushing, 3)
+        );
     }
 
     #[test]
@@ -536,15 +631,17 @@ mod close_guard {
             ClosePhase::DiscardAllowed,
             ClosePhase::Closing,
         ] {
-            assert_eq!(handle_ack(phase), phase);
+            assert_eq!(handle_ack(close_state(phase, 3)), close_state(phase, 3));
         }
     }
 
     #[test]
     fn a_confirm_after_a_landed_flush_destroys() {
+        // A confirm belongs to the in-flight cycle (the one it was
+        // acknowledged in).
         assert_eq!(
-            handle_confirm(ClosePhase::Flushing),
-            (ClosePhase::Closing, true)
+            handle_confirm(close_state(ClosePhase::Flushing, 3)),
+            (close_state(ClosePhase::Closing, 3), true)
         );
     }
 
@@ -553,8 +650,8 @@ mod close_guard {
         // Off-protocol (no ack first), but the frontend says the flush
         // landed, so destroying is data-safe.
         assert_eq!(
-            handle_confirm(ClosePhase::FlushRequested),
-            (ClosePhase::Closing, true)
+            handle_confirm(close_state(ClosePhase::FlushRequested, 3)),
+            (close_state(ClosePhase::Closing, 3), true)
         );
     }
 
@@ -563,25 +660,31 @@ mod close_guard {
         // A late or duplicated confirm after a cancelled (failed) flush
         // must not undo "stay open".
         assert_eq!(
-            handle_confirm(ClosePhase::DiscardAllowed),
-            (ClosePhase::DiscardAllowed, false)
+            handle_confirm(close_state(ClosePhase::DiscardAllowed, 3)),
+            (close_state(ClosePhase::DiscardAllowed, 3), false)
         );
-        assert_eq!(handle_confirm(ClosePhase::Idle), (ClosePhase::Idle, false));
         assert_eq!(
-            handle_confirm(ClosePhase::Closing),
-            (ClosePhase::Closing, false)
+            handle_confirm(close_state(ClosePhase::Idle, 3)),
+            (close_state(ClosePhase::Idle, 3), false)
+        );
+        assert_eq!(
+            handle_confirm(close_state(ClosePhase::Closing, 3)),
+            (close_state(ClosePhase::Closing, 3), false)
         );
     }
 
     #[test]
     fn a_cancel_moves_the_flush_cycle_to_discard_allowed() {
+        // A cancel keeps the in-flight cycle: closing again without
+        // editing still passes, and the new close (out of a later
+        // re-arm) is what retires this cycle's timers.
         assert_eq!(
-            handle_cancel(ClosePhase::FlushRequested),
-            ClosePhase::DiscardAllowed
+            handle_cancel(close_state(ClosePhase::FlushRequested, 3)),
+            close_state(ClosePhase::DiscardAllowed, 3)
         );
         assert_eq!(
-            handle_cancel(ClosePhase::Flushing),
-            ClosePhase::DiscardAllowed
+            handle_cancel(close_state(ClosePhase::Flushing, 3)),
+            close_state(ClosePhase::DiscardAllowed, 3)
         );
     }
 
@@ -592,53 +695,104 @@ mod close_guard {
             ClosePhase::DiscardAllowed,
             ClosePhase::Closing,
         ] {
-            assert_eq!(handle_cancel(phase), phase);
+            assert_eq!(handle_cancel(close_state(phase, 3)), close_state(phase, 3));
         }
     }
 
     #[test]
     fn the_no_ack_fallback_destroys_only_when_unacked() {
+        // A timer that fires in its own (current) cycle acts.
         assert_eq!(
-            handle_timer(FlushTimer::NoAck, ClosePhase::FlushRequested),
-            (true, ClosePhase::Closing)
+            handle_timer(close_state(ClosePhase::FlushRequested, 3), FlushTimer::NoAck, 3),
+            (true, close_state(ClosePhase::Closing, 3))
         );
         // Acked: the 30 s ceiling governs, not this fallback.
         assert_eq!(
-            handle_timer(FlushTimer::NoAck, ClosePhase::Flushing),
-            (false, ClosePhase::Flushing)
+            handle_timer(close_state(ClosePhase::Flushing, 3), FlushTimer::NoAck, 3),
+            (false, close_state(ClosePhase::Flushing, 3))
         );
         // Cancelled (even before an ack): the window must stay open.
         assert_eq!(
-            handle_timer(FlushTimer::NoAck, ClosePhase::DiscardAllowed),
-            (false, ClosePhase::DiscardAllowed)
+            handle_timer(close_state(ClosePhase::DiscardAllowed, 3), FlushTimer::NoAck, 3),
+            (false, close_state(ClosePhase::DiscardAllowed, 3))
         );
         assert_eq!(
-            handle_timer(FlushTimer::NoAck, ClosePhase::Idle),
-            (false, ClosePhase::Idle)
+            handle_timer(close_state(ClosePhase::Idle, 3), FlushTimer::NoAck, 3),
+            (false, close_state(ClosePhase::Idle, 3))
         );
         assert_eq!(
-            handle_timer(FlushTimer::NoAck, ClosePhase::Closing),
-            (false, ClosePhase::Closing)
+            handle_timer(close_state(ClosePhase::Closing, 3), FlushTimer::NoAck, 3),
+            (false, close_state(ClosePhase::Closing, 3))
         );
     }
 
     #[test]
     fn the_ceiling_destroys_only_a_hung_flush() {
         assert_eq!(
-            handle_timer(FlushTimer::Ceiling, ClosePhase::Flushing),
-            (true, ClosePhase::Closing)
+            handle_timer(close_state(ClosePhase::Flushing, 3), FlushTimer::Ceiling, 3),
+            (true, close_state(ClosePhase::Closing, 3))
         );
         assert_eq!(
-            handle_timer(FlushTimer::Ceiling, ClosePhase::FlushRequested),
-            (false, ClosePhase::FlushRequested)
+            handle_timer(close_state(ClosePhase::FlushRequested, 3), FlushTimer::Ceiling, 3),
+            (false, close_state(ClosePhase::FlushRequested, 3))
         );
         assert_eq!(
-            handle_timer(FlushTimer::Ceiling, ClosePhase::DiscardAllowed),
-            (false, ClosePhase::DiscardAllowed)
+            handle_timer(close_state(ClosePhase::DiscardAllowed, 3), FlushTimer::Ceiling, 3),
+            (false, close_state(ClosePhase::DiscardAllowed, 3))
         );
         assert_eq!(
-            handle_timer(FlushTimer::Ceiling, ClosePhase::Idle),
-            (false, ClosePhase::Idle)
+            handle_timer(close_state(ClosePhase::Idle, 3), FlushTimer::Ceiling, 3),
+            (false, close_state(ClosePhase::Idle, 3))
+        );
+    }
+
+    #[test]
+    fn a_timer_outlives_its_cycle_after_a_rearmed_close_and_is_a_noop() {
+        // The reviewer-blocked regression: a close was cancelled (a failed
+        // flush left the guard in `DiscardAllowed`) and a new edit
+        // re-armed it; a *new* close then started a fresh cycle while the
+        // previous cycle's timers were still sleeping.
+        let (a, s1) = handle_close_request(close_state(ClosePhase::Idle, 1));
+        assert_eq!(a, CloseAction::Intercept { emit: true });
+        let old = s1.cycle; // the no-ack timer started for this cycle
+        assert_ne!(old, 1);
+        let s2 = handle_cancel(s1); // the flush failed: stay open
+        let s3 = handle_save_started(s2); // a new edit re-arms it
+        let (a2, s4) = handle_close_request(s3); // the new close
+        assert_eq!(a2, CloseAction::Intercept { emit: true });
+        let new = s4.cycle;
+        assert_eq!(a, CloseAction::Intercept { emit: true });
+        assert_ne!(new, old);
+
+        // The old cycle's no-ack timer wakes while the window is in a
+        // *later* cycle's `FlushRequested`: it must not destroy (nor even
+        // touch) the current state.
+        assert_eq!(
+            handle_timer(s4, FlushTimer::NoAck, old),
+            (false, s4)
+        );
+        // The old cycle's 30 s ceiling (started by the first cycle's ack)
+        // is retired the same way, whether the window is mid-flush or
+        // still waiting for its ack.
+        let acked = handle_ack(s4);
+        assert_eq!(
+            handle_timer(acked, FlushTimer::Ceiling, old),
+            (false, acked)
+        );
+        assert_eq!(
+            handle_timer(s4, FlushTimer::Ceiling, old),
+            (false, s4)
+        );
+        // The new cycle's own timers still work: the no-ack fallback
+        // destroys a window that never acked in this cycle, and the
+        // ceiling a flush that hangs in it.
+        assert_eq!(
+            handle_timer(s4, FlushTimer::NoAck, new),
+            (true, close_state(ClosePhase::Closing, new))
+        );
+        assert_eq!(
+            handle_timer(acked, FlushTimer::Ceiling, new),
+            (true, close_state(ClosePhase::Closing, new))
         );
     }
 }

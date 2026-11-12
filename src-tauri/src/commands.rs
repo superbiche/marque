@@ -295,9 +295,22 @@ pub async fn get_highlights(path: String) -> AppResult<GetHighlightsResult> {
 /// (line range + normalized-text window + one-way hash) plus the user's
 /// own note — never the selected text. The save (temp write + `sync_all`
 /// + rename + directory `fsync`) runs on the blocking pool, not the main
-/// thread (see `run_blocking`).
+/// thread (see `run_blocking`). Before that, it re-arms the close guard:
+/// an edit that was just accepted means the guard's `DiscardAllowed`
+/// ("the next close passes through without saving") must not outlive it,
+/// so the guard moves back to `Idle` (a no-op in every other phase) and a
+/// later close requests a flush instead of discarding these edits.
 #[tauri::command]
-pub async fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()> {
+pub async fn save_highlights(app: AppHandle, path: String, highlights: Vec<Highlight>) -> AppResult<()> {
+    // Re-arm the close guard (a new edit was accepted): `DiscardAllowed`
+    // → `Idle`, a no-op in every other phase. Done synchronously before
+    // the blocking body — every accepted edit queues a save immediately,
+    // so no frontend round-trip is needed (and the re-arm cannot race the
+    // close cycle the way a fire-and-forget invoke could).
+    if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
+        let mut state = guard.state.lock();
+        *state = crate::handle_save_started(*state);
+    }
     run_blocking("save_highlights", move || {
         if !std::path::Path::new(&path).is_absolute() {
             return Err(AppError::Invalid(format!(
@@ -358,12 +371,16 @@ pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
     let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() else {
         return Ok(());
     };
-    let transitioned = {
-        let mut phase = guard.phase.lock();
-        let next = crate::handle_ack(*phase);
-        let t = next != *phase;
-        *phase = next;
-        t
+    let (transitioned, cycle) = {
+        let mut state = guard.state.lock();
+        let next = crate::handle_ack(*state);
+        let t = next != *state;
+        // The ceiling is started for the cycle the ack belongs to (the
+        // same one the flush-request that began it); capture it so the
+        // timer acts only while that cycle is still current.
+        let c = next.cycle;
+        *state = next;
+        (t, c)
     };
     if transitioned {
         let guard = Arc::clone(&*guard);
@@ -374,9 +391,9 @@ pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(30));
             let destroy = {
-                let mut phase = guard.phase.lock();
-                let (d, n) = crate::handle_timer(crate::FlushTimer::Ceiling, *phase);
-                *phase = n;
+                let mut state = guard.state.lock();
+                let (d, n) = crate::handle_timer(*state, crate::FlushTimer::Ceiling, cycle);
+                *state = n;
                 d
             };
             if destroy {
@@ -387,8 +404,8 @@ pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
                 // `DiscardAllowed`).
                 if window.destroy().is_err() {
                     eprintln!("marque: could not destroy the main window (30 s ceiling)");
-                    let mut phase = guard.phase.lock();
-                    *phase = crate::on_destroy_result(*phase, false);
+                    let mut state = guard.state.lock();
+                    *state = crate::on_destroy_result(*state, false);
                 }
             }
         });
@@ -412,9 +429,9 @@ pub fn confirm_close(app: AppHandle) -> AppResult<()> {
         None => return Ok(()),
     };
     let destroy = {
-        let mut phase = guard.phase.lock();
-        let (next, d) = crate::handle_confirm(*phase);
-        *phase = next;
+        let mut state = guard.state.lock();
+        let (next, d) = crate::handle_confirm(*state);
+        *state = next;
         d
     };
     if destroy {
@@ -427,8 +444,8 @@ pub fn confirm_close(app: AppHandle) -> AppResult<()> {
         // (`on_destroy_result` moves the phase to `DiscardAllowed`).
         if window.destroy().is_err() {
             eprintln!("marque: could not destroy the main window (confirm close)");
-            let mut phase = guard.phase.lock();
-            *phase = crate::on_destroy_result(*phase, false);
+            let mut state = guard.state.lock();
+            *state = crate::on_destroy_result(*state, false);
         }
     }
     Ok(())
@@ -441,23 +458,8 @@ pub fn confirm_close(app: AppHandle) -> AppResult<()> {
 #[tauri::command]
 pub fn cancel_close(app: AppHandle) -> AppResult<()> {
     if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
-        let mut phase = guard.phase.lock();
-        *phase = crate::handle_cancel(*phase);
-    }
-    Ok(())
-}
-
-/// Re-arm the close guard after new edits were accepted following a
-/// cancelled close: the guard moves `DiscardAllowed` → `Idle`, so the
-/// next close request intercepts and asks for a flush instead of
-/// discarding the new edits without saving. The frontend calls it on the
-/// first accepted mutation after a cancelled close; a stale rearm in any
-/// other phase is a no-op. Synchronous: no I/O.
-#[tauri::command]
-pub fn rearm_close_guard(app: AppHandle) -> AppResult<()> {
-    if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
-        let mut phase = guard.phase.lock();
-        *phase = crate::handle_rearm(*phase);
+        let mut state = guard.state.lock();
+        *state = crate::handle_cancel(*state);
     }
     Ok(())
 }

@@ -139,12 +139,6 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // re-check loop — would never be persisted. It is cleared only on a
   // cancelled close, when the window stays open and editing resumes.
   const closingRef = React.useRef(false);
-  // Set when a close is cancelled (the native guard is then in
-  // `DiscardAllowed`: the next close passes through without saving).
-  // The first accepted mutation clears it and re-arms the native guard
-  // (`rearmCloseGuard` → `Idle`), so a later close asks for a flush for
-  // those new edits instead of discarding them.
-  const rearmPendingRef = React.useRef(false);
 
   React.useEffect(() => {
     localStorage.setItem(ACTIVE_COLOUR_KEY, activeColour);
@@ -267,16 +261,6 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   const markChanged = React.useCallback(
     (path: string) => {
       writerFor(path).gen += 1;
-      if (rearmPendingRef.current) {
-        // A close was cancelled and a new edit was accepted: re-arm the
-        // native guard (back to `Idle`) so a later close requests a
-        // flush for these edits instead of discarding them. One call per
-        // cancelled close; a stale rearm is a no-op natively.
-        rearmPendingRef.current = false;
-        void tauri
-          .rearmCloseGuard()
-          .catch((err) => console.error("failed to rearm the close guard", err));
-      }
       void enqueueSave(path);
     },
     [writerFor, enqueueSave],
@@ -489,17 +473,24 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
             // the 30-second ceiling destroys the window either way
           }
         } else {
-          // The window stays open: resume normal mutation behaviour. The
-          // native guard moves to `DiscardAllowed`; `rearmPendingRef`
-          // makes the first accepted mutation re-arm it, so a later
-          // close flushes new edits instead of discarding them.
-          closingRef.current = false;
-          rearmPendingRef.current = true;
+          // The flush failed: ask the native guard to cancel the close
+          // first (it moves to `DiscardAllowed`, "the next close passes
+          // through without saving"), and only then re-open edits.
+          // Awaiting the cancel — even to its rejection — keeps the
+          // frontend gate in lockstep with the native guard, so a
+          // mutation never lands while the guard is still mid-cancel.
+          // Re-arming is now native: the next accepted edit's save moves
+          // the guard back to `Idle`, so a later close flushes those
+          // edits instead of discarding them.
           try {
             await tauri.cancelClose();
-          } catch {
-            // the 30-second ceiling destroys the window either way
+          } catch (err) {
+            // The cancel call itself failed (the 30-second ceiling
+            // destroys the window either way): still re-open edits below
+            // so the app never gets stuck refusing them.
+            console.error("failed to cancel the close after a failed flush", err);
           }
+          closingRef.current = false;
           notifyApp("Couldn't save highlights. Close the window again to close without saving.");
         }
       })();
