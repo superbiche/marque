@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Added
+- Highlights: select a passage within one block (a paragraph, list item, table cell or heading) to mark it in one of five colours and attach a note. The highlights panel (toolbar highlighter button, or the command palette) groups them by colour, copies them as agent-ready blocks (one, one colour, or all) and offers a 5-second undo after a deletion. A highlight whose passage is no longer in the document stays listed as not found, with its note. `~/.config/marque/highlights.json` stores line anchors, a keyed fingerprint of each passage and your notes, never the document's text; the fingerprint key lives in `~/.config/marque/highlights.key` (mode 0600 on Linux and macOS), and without that key stored passages cannot be re-found. (Ported from GRVYDEV/marky#9 by @JohnnyBonk, with storage reduced to references and notes.)
+
 ## [0.4.10] - 2026-11-12
 
 ### Added

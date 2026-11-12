@@ -1,6 +1,7 @@
 use crate::cli::InitialTarget;
 use crate::error::{AppError, AppResult};
 use crate::folder::TreeNode;
+use crate::highlights::{Highlight, HighlightsFile, MAX_HIGHLIGHTS_PER_FILE, MAX_NOTE_CHARS};
 use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
 use crate::settings::{settings_dir, Folder, SettingsLoadStatus};
@@ -9,9 +10,30 @@ use anyhow::Context as _;
 use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct InitialTargetState(pub Mutex<InitialTarget>);
+
+/// Run a blocking body on the blocking thread pool and await it. Tauri 2
+/// runs synchronous commands on the main thread, where the highlights
+/// commands' file I/O (including the durability `fsync`s) would freeze
+/// window input and close handling on a slow volume. A join failure
+/// (worker panic or cancellation) is mapped to an `AppError` with
+/// context; the error value itself is never echoed — a panic message
+/// could carry values. The RMW/KEY locks are taken inside the blocking
+/// body, so their coverage is unchanged.
+async fn run_blocking<T: Send + 'static>(
+    op: &'static str,
+    body: impl FnOnce() -> AppResult<T> + Send + 'static,
+) -> AppResult<T> {
+    tauri::async_runtime::spawn_blocking(body)
+        .await
+        .map_err(|_e| {
+            AppError::Other(anyhow::anyhow!(
+                "{op}: the blocking worker was cancelled or panicked before returning a result"
+            ))
+        })?
+}
 
 #[tauri::command]
 pub fn get_initial_target(state: State<'_, InitialTargetState>) -> InitialTarget {
@@ -236,6 +258,221 @@ pub fn get_settings_load_status(
     status: State<'_, SettingsLoadStatus>,
 ) -> SettingsLoadStatus {
     (*status).clone()
+}
+
+/// The v2 highlights for one document path (empty when none).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetHighlightsResult {
+    pub version: u32,
+    pub highlights: Vec<Highlight>,
+}
+
+/// The v2 highlights for one document path (empty when none). The load
+/// (file read + the filtering write-back it may trigger + the directory
+/// `fsync`) runs on the blocking pool, not the main thread (see
+/// `run_blocking`).
+#[tauri::command]
+pub async fn get_highlights(path: String) -> AppResult<GetHighlightsResult> {
+    run_blocking("get_highlights", move || {
+        if !std::path::Path::new(&path).is_absolute() {
+            return Err(AppError::Invalid(format!(
+                "path must be absolute, got: {path}"
+            )));
+        }
+        let file = HighlightsFile::load(&settings_dir())?;
+        let highlights = file.get(&path).to_vec();
+        Ok(GetHighlightsResult {
+            version: file.version,
+            highlights,
+        })
+    })
+    .await
+}
+
+/// Replace the highlights for one document path; other paths are untouched.
+/// An empty list removes the key. The file itself stores only references
+/// (line range + normalized-text window + one-way hash) plus the user's
+/// own note — never the selected text. The save (temp write + `sync_all`
+/// + rename + directory `fsync`) runs on the blocking pool, not the main
+/// thread (see `run_blocking`). The close guard is not touched here:
+/// whether a close may discard unsaved edits is the frontend's
+/// decision (it is the source of truth for accepted edits, which this
+/// command only sees once the save reaches Rust).
+#[tauri::command]
+pub async fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()> {
+    run_blocking("save_highlights", move || {
+        if !std::path::Path::new(&path).is_absolute() {
+            return Err(AppError::Invalid(format!(
+                "path must be absolute, got: {path}"
+            )));
+        }
+        if highlights.len() > MAX_HIGHLIGHTS_PER_FILE {
+            return Err(AppError::Invalid(format!(
+                "at most {MAX_HIGHLIGHTS_PER_FILE} highlights per file, got {}",
+                highlights.len()
+            )));
+        }
+        for (i, h) in highlights.iter().enumerate() {
+            // Structural validation (id, hash shape, ranges, timestamps).
+            // The error names only the category and the entry's position,
+            // never its values — they are attacker-controllable strings.
+            if let Some(problem) = crate::highlights::entry_problem(h) {
+                return Err(AppError::Invalid(format!(
+                    "invalid highlight entry #{i}: {problem} (line {}, offset {})",
+                    h.anchor.start_line, h.anchor.start_offset
+                )));
+            }
+            if let Some(note) = &h.note {
+                if note.chars().count() > MAX_NOTE_CHARS {
+                    return Err(AppError::Invalid(format!(
+                        "highlight note exceeds {MAX_NOTE_CHARS} characters"
+                    )));
+                }
+            }
+        }
+        // The read-modify-write is serialized process-wide (see
+        // `HighlightsFile::update_path`) so rapid edits from two panes
+        // cannot lose each other's update.
+        HighlightsFile::update_path(&settings_dir(), path, highlights)
+    })
+    .await
+}
+
+/// The per-installation 128-bit SipHash key as 32 lowercase hex
+/// characters. Created on first call at `<settings_dir>/highlights.key`
+/// (mode 0600 on Unix); the key never appears in `highlights.json`. The
+/// key-file access (including its durability `fsync`s) runs on the
+/// blocking pool, not the main thread (see `run_blocking`).
+#[tauri::command]
+pub async fn get_highlights_key() -> AppResult<String> {
+    run_blocking("get_highlights_key", || crate::highlights::get_key(&settings_dir())).await
+}
+
+/// Acknowledgement of a close request: the frontend calls this as soon as
+/// it receives the `highlights://flush-request` event. It moves the close
+/// guard to `Flushing`, which suppresses the 2 s "frontend dead" fallback
+/// (it only fires from `FlushRequested`) and starts a 30-second ceiling
+/// timer that destroys the window if neither `confirm_close` nor
+/// `cancel_close` arrives (the flush can be slow but not forever). A
+/// stale or duplicated ack in any other phase is a no-op.
+#[tauri::command]
+pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
+    let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() else {
+        return Ok(());
+    };
+    let (transitioned, cycle) = {
+        let mut state = guard.state.lock();
+        let next = crate::handle_ack(*state);
+        let t = next != *state;
+        // The ceiling is started for the cycle the ack belongs to (the
+        // same one the flush-request that began it); capture it so the
+        // timer acts only while that cycle is still current.
+        let c = next.cycle;
+        *state = next;
+        (t, c)
+    };
+    if transitioned {
+        let guard = Arc::clone(&*guard);
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| AppError::Other(anyhow::anyhow!("no main window")))?
+            .clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let destroy = {
+                let mut state = guard.state.lock();
+                let (d, n) = crate::handle_timer(*state, crate::FlushTimer::Ceiling, cycle);
+                *state = n;
+                d
+            };
+            if destroy {
+                // A failed destroy must not leave the window trapped in
+                // `Closing` (no timer acts from that phase): log the
+                // failure without values and return the guard to `Idle`
+                // (`on_destroy_result`), so the next close request is a
+                // fresh cycle.
+                if window.destroy().is_err() {
+                    eprintln!("marque: could not destroy the main window (30 s ceiling)");
+                    let mut state = guard.state.lock();
+                    *state = crate::on_destroy_result(*state, false);
+                }
+            }
+        });
+    }
+    Ok(())
+}
+
+/// Final word on a close request: the frontend calls this after its
+/// highlights flush has landed, which destroys the main window. It is
+/// honored only from an in-flight flush (`Flushing`, or a
+/// protocol-violating `FlushRequested` where the ack was skipped) — a
+/// confirm after a failed (cancelled) flush, or a stray confirm from
+/// anywhere else, does not close the window. If the destroy call itself
+/// fails, the guard returns to `Idle`, so the next close request is a
+/// fresh cycle — a failed destroy must not leave the window uncloseable.
+/// It must only be called by our own webview.
+#[tauri::command]
+pub fn confirm_close(app: AppHandle) -> AppResult<()> {
+    let guard = match app.try_state::<Arc<crate::CloseGuard>>() {
+        Some(g) => g,
+        None => return Ok(()),
+    };
+    let destroy = {
+        let mut state = guard.state.lock();
+        let (next, d) = crate::handle_confirm(*state);
+        *state = next;
+        d
+    };
+    if destroy {
+        let Some(window) = app.get_webview_window("main") else {
+            return Ok(());
+        };
+        // A failed destroy must not leave the window trapped in
+        // `Closing` (no timer acts from that phase): log the failure
+        // without values and return the guard to `Idle`
+        // (`on_destroy_result`), so the next close request is a fresh
+        // cycle.
+        if window.destroy().is_err() {
+            eprintln!("marque: could not destroy the main window (confirm close)");
+            let mut state = guard.state.lock();
+            *state = crate::on_destroy_result(*state, false);
+        }
+    }
+    Ok(())
+}
+
+/// Cancel a close request after a failed highlights flush: the window
+/// stays open, and the guard returns to `Idle` for the same cycle, so
+/// the *next* close request is a fresh cycle that requests a flush
+/// again. Whether that close discards the unsaved edits is the
+/// frontend's call (it knows every accepted edit; this guard only
+/// sequences the close itself). A stale cancel outside an in-flight
+/// flush cycle is a no-op.
+#[tauri::command]
+pub fn cancel_close(app: AppHandle) -> AppResult<()> {
+    if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
+        let mut state = guard.state.lock();
+        *state = crate::handle_cancel(*state);
+    }
+    Ok(())
+}
+
+/// All document paths that currently have at least one highlight, sorted
+/// for a stable UI order. The load runs on the blocking pool, not the
+/// main thread (see `run_blocking`).
+#[tauri::command]
+pub async fn list_highlighted_paths() -> AppResult<Vec<String>> {
+    run_blocking("list_highlighted_paths", || {
+        let mut paths = HighlightsFile::load(&settings_dir())?
+            .files
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        paths.sort();
+        Ok(paths)
+    })
+    .await
 }
 
 /// Show a file in the system file manager.

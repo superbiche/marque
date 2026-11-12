@@ -168,6 +168,68 @@
 .markdown-body.markdown-width-wide { max-width: 1200px; }
 .markdown-body.markdown-width-full { max-width: none; }
 
+/*
+  Highlight palette. Colourblind-safe pastels, ported from GRVYDEV/marky#9:
+  the pairs stay distinguishable for protanopia. Light theme: opaque pastels
+  with dark text; dark theme: the pastels fade to 45% over the surface so
+  they read as muted tints, and the text stays the theme foreground.
+*/
+:root {
+  --hl-yellow: #ffe066;
+  --hl-orange: #ffb37a;
+  --hl-pink: #f4a6c0;
+  --hl-blue: #a4c8ff;
+  --hl-purple: #c9b6ff;
+  --hl-bg-yellow: var(--hl-yellow);
+  --hl-bg-orange: var(--hl-orange);
+  --hl-bg-pink: var(--hl-pink);
+  --hl-bg-blue: var(--hl-blue);
+  --hl-bg-purple: var(--hl-purple);
+}
+.dark {
+  --hl-bg-yellow: rgba(255, 224, 102, 0.45);
+  --hl-bg-orange: rgba(255, 179, 122, 0.45);
+  --hl-bg-pink: rgba(244, 166, 192, 0.45);
+  --hl-bg-blue: rgba(164, 200, 255, 0.45);
+  --hl-bg-purple: rgba(201, 182, 255, 0.45);
+}
+
+.marque-highlight {
+  border-radius: 2px;
+  padding: 0 1px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  cursor: pointer;
+  transition: outline-color 80ms ease-in-out;
+  outline: 1px solid transparent;
+  outline-offset: 1px;
+}
+.marque-highlight:hover {
+  outline-color: rgba(0, 0, 0, 0.45);
+}
+.dark .marque-highlight:hover {
+  outline-color: rgba(255, 255, 255, 0.55);
+}
+.marque-highlight[data-edit-active="true"] {
+  outline-color: var(--ring);
+  outline-width: 2px;
+}
+
+.marque-highlight[data-highlight-colour="yellow"] { background-color: var(--hl-bg-yellow); color: #1a1a1a; }
+.marque-highlight[data-highlight-colour="orange"] { background-color: var(--hl-bg-orange); color: #1a1a1a; }
+.marque-highlight[data-highlight-colour="pink"]   { background-color: var(--hl-bg-pink);   color: #1a1a1a; }
+.marque-highlight[data-highlight-colour="blue"]   { background-color: var(--hl-bg-blue);   color: #1a1a1a; }
+.marque-highlight[data-highlight-colour="purple"] { background-color: var(--hl-bg-purple); color: #1a1a1a; }
+.dark .marque-highlight {
+  color: var(--foreground);
+}
+
+.marque-highlight-swatch[data-highlight-colour="yellow"] { background-color: var(--hl-yellow); }
+.marque-highlight-swatch[data-highlight-colour="orange"] { background-color: var(--hl-orange); }
+.marque-highlight-swatch[data-highlight-colour="pink"]   { background-color: var(--hl-pink); }
+.marque-highlight-swatch[data-highlight-colour="blue"]   { background-color: var(--hl-blue); }
+.marque-highlight-swatch[data-highlight-colour="purple"] { background-color: var(--hl-purple); }
+
 @media print {
   /* Full page width, and neither content zoom nor the width mode applies —
      the paper size and the page margins decide the measure. Print type is set
@@ -259,4 +321,19 @@
     color: inherit;
     outline: none;
   }
+
+  /* Highlights print as a faint tint: the marking stays visible without the
+     full pastel block. Browsers drop backgrounds in print by default, so
+     exact color adjust keeps the tint. */
+  .markdown-body .marque-highlight {
+    cursor: auto;
+    outline: none;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .markdown-body .marque-highlight[data-highlight-colour="yellow"] { background-color: rgba(255, 224, 102, 0.3); color: inherit; }
+  .markdown-body .marque-highlight[data-highlight-colour="orange"] { background-color: rgba(255, 179, 122, 0.3); color: inherit; }
+  .markdown-body .marque-highlight[data-highlight-colour="pink"] { background-color: rgba(244, 166, 192, 0.3); color: inherit; }
+  .markdown-body .marque-highlight[data-highlight-colour="blue"] { background-color: rgba(164, 200, 255, 0.3); color: inherit; }
+  .markdown-body .marque-highlight[data-highlight-colour="purple"] { background-color: rgba(201, 182, 255, 0.3); color: inherit; }
 }

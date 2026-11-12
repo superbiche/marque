@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Highlight } from "./highlights";
 
 export type InitialTarget =
   | { kind: "file"; path: string }
@@ -73,7 +74,47 @@ export const tauri = {
   loadPreferences: () => invoke<PreferencesPayload>("load_preferences"),
   getSettingsLoadStatus: () => invoke<SettingsLoadStatus>("get_settings_load_status"),
   revealInFileManager: (path: string) => invoke<void>("reveal_in_file_manager", { path }),
+  getHighlights: (path: string) => invoke<GetHighlightsResult>("get_highlights", { path }),
+  saveHighlights: (path: string, highlights: Highlight[]) =>
+    invoke<void>("save_highlights", { path, highlights }),
+  listHighlightedPaths: () => invoke<string[]>("list_highlighted_paths"),
+  /** The per-installation 128-bit key (32 lowercase hex) used to fingerprint
+   *  passage windows. Generated once on first use and stored in
+   *  `highlights.key`; it never appears in highlights.json. */
+  getHighlightsKey: () => invoke<string>("get_highlights_key"),
+  /**
+   * Acknowledge a window-close flush request the moment it is received: this
+   * tells the backend the frontend is alive, which suppresses its 2-second
+   * "frontend dead" fallback and starts a 30-second ceiling instead. Called
+   * first in the `highlights://flush-request` handler, before the flush.
+   */
+  ackCloseRequest: () => invoke<void>("ack_close_request"),
+  /**
+   * Final word on a window close: the backend intercepts the first close
+   * request, emits `highlights://flush-request`, waits for an ack and then a
+   * flush. After awaiting its highlights flush the frontend calls this to let
+   * the close through (and to stop the 30-second ceiling). See
+   * `onHighlightsFlushRequest`.
+   */
+  confirmClose: () => invoke<void>("confirm_close"),
+  /**
+   * Cancel a window close after a failed highlights flush: stops the
+   * 30-second ceiling without closing the window. The backend's close
+   * guard returns to `Idle` for the same cycle, so a later close request
+   * is a fresh cycle that requests a flush again (the frontend decides
+   * whether it confirms or cancels).
+   */
+  cancelClose: () => invoke<void>("cancel_close"),
 };
+
+/**
+ * Result of `get_highlights`: the v2 reference-only highlights for one
+ * document path (empty when none).
+ */
+export interface GetHighlightsResult {
+  version: number;
+  highlights: Highlight[];
+}
 
 export interface PreferencesPayload {
   zoom: number | null;
@@ -104,8 +145,18 @@ export function onFolderWatchLimit(cb: (limit: WatchLimit) => void): Promise<Unl
 }
 
 /**
+ * Fired by the backend when the main window's first close request is
+ * intercepted so the frontend can flush pending highlights before the window
+ * is destroyed (see `confirmClose`). The payload is a no-op token.
+ */
+export function onHighlightsFlushRequest(cb: () => void): Promise<UnlistenFn> {
+  return listen("highlights://flush-request", () => cb());
+}
+
+/**
  * Ids the native macOS menu can emit (see `src-tauri/src/menu.rs`).
- * `help_github` and `close_window` are handled in Rust and never arrive.
+ * `help_github`, `close_window` and `quit` are handled in Rust and never
+ * arrive.
  */
 export type MenuActionId =
   | "open_file"

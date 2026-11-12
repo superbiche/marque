@@ -10,7 +10,10 @@ import { Pane } from "@/components/Pane";
 import { TableOfContents } from "@/components/TableOfContents";
 import { Toolbar } from "@/components/Toolbar";
 import { CommandPalette } from "@/components/CommandPalette";
+import { HighlightsPanel } from "@/components/HighlightsPanel";
 import { Notifications, notifyApp } from "@/components/Notifications";
+import { HighlightsProvider, useHighlights } from "@/lib/highlightsStore";
+import type { PanelEntry } from "@/lib/highlights";
 import {
   tauri,
   onCliTarget,
@@ -64,6 +67,14 @@ function AppShell() {
   const [pendingFragment, setPendingFragment] = useState<{ path: string; fragment: string } | null>(null);
   const [folders, setFolders] = useState<AnnotatedFolder[]>([]);
   const [pinnedFiles, setPinnedFiles] = useState<string[]>([]);
+  // Per-pane registry of rendered article elements, so the highlight panel's
+  // jump dispatches `marque:scroll-to-highlight` on the right pane's article.
+  const [articles, setArticles] = useState<Map<string, HTMLElement>>(new Map());
+  // Per-document panel projection: the rows the review panel shows, published
+  // by the Viewer from the very resolution it applies (F4 — the panel never
+  // re-derives rows from the live DOM, so it can't show a fresh highlight
+  // as orphaned or with stale text).
+  const [resolutions, setResolutions] = useState<Map<string, PanelEntry[]>>(new Map());
   // True once a pin/unpin response has been applied — from then on the
   // backend-returned lists are authoritative over the initial load.
   const pinsMutatedRef = useRef(false);
@@ -76,6 +87,18 @@ function AppShell() {
     sidebarLeftWidth, sidebarRightWidth,
     setSidebarWidth, resetSidebarWidth,
   } = usePreferences();
+  const {
+    byFile,
+    activeColour,
+    setActiveColour,
+    panelOpen,
+    setPanelOpen,
+    removeHighlight,
+    updateHighlight,
+    lastDeleted,
+    undoDelete,
+    flush,
+  } = useHighlights();
 
   const activeTab = getActiveTab(state);
   const activePane = getActivePane(state);
@@ -199,6 +222,43 @@ function AppShell() {
     });
   }, []);
 
+  const handleArticleChange = useCallback((paneId: string, el: HTMLElement | null) => {
+    setArticles((prev) => {
+      if (prev.get(paneId) === el) return prev;
+      const next = new Map(prev);
+      if (el) next.set(paneId, el);
+      else next.delete(paneId);
+      return next;
+    });
+  }, []);
+
+  const handleResolutionChange = useCallback((path: string, entries: PanelEntry[]) => {
+    setResolutions((prev) => {
+      if (prev.get(path) === entries) return prev;
+      const next = new Map(prev);
+      next.set(path, entries);
+      return next;
+    });
+  }, []);
+
+  // F7: when a document's last tab closes, flush the pending saves
+  // (fire-and-forget; the window-close flush in the store is the awaited
+  // version). One tab per file, so a closed tab whose path no longer
+  // appears in any tab is the document's last.
+  const prevTabsRef = useRef<Record<string, TabState>>(state.tabs);
+  useEffect(() => {
+    const prev = prevTabsRef.current;
+    prevTabsRef.current = state.tabs;
+    for (const id of Object.keys(prev)) {
+      if (state.tabs[id]) continue;
+      const path = prev[id]?.filePath;
+      if (!path) continue;
+      const stillOpen = Object.values(state.tabs).some((t) => t.filePath === path);
+      if (stillOpen) continue;
+      void flush().catch(() => {});
+    }
+  }, [state.tabs, flush]);
+
   const handlePrint = useCallback(async () => {
     if (printingRef.current) return;
     printingRef.current = true;
@@ -275,6 +335,12 @@ function AppShell() {
   const handleFind = useCallback(() => setSearchPaneId(state.activePaneId), [state.activePaneId]);
   const handleOpenPalette = useCallback(() => setPaletteOpen(true), []);
   const handleFragmentHandled = useCallback(() => setPendingFragment(null), []);
+  // Identity-stable while panelOpen is stable, so the memoized Toolbar and
+  // palette don't re-render on unrelated AppShell updates.
+  const handleToggleHighlights = useCallback(
+    () => setPanelOpen(!panelOpen),
+    [panelOpen, setPanelOpen],
+  );
 
   const revealFile = useCallback(async (filePath?: string) => {
     if (!filePath) {
@@ -490,6 +556,8 @@ function AppShell() {
         fragment={fragment}
         onFragmentHandled={handleFragmentHandled}
         onContentRendered={handleContentRendered}
+        onArticleChange={handleArticleChange}
+        onResolutionChange={handleResolutionChange}
         onRevealFile={handleRevealFile}
         onCopyContent={handleCopyContent}
         onCopyPath={handleCopyPath}
@@ -529,6 +597,9 @@ function AppShell() {
           onCloseSplit={handleCloseSplit}
           isSplit={isSplit}
           onFind={handleFind}
+          onToggleHighlights={handleToggleHighlights}
+          highlightsOpen={panelOpen}
+          activeHighlightColour={activeColour}
           onPrint={handlePrint}
           onRevealFile={handleRevealActiveFile}
           onCopyContent={handleCopyActiveContent}
@@ -560,7 +631,7 @@ function AppShell() {
               ))}
             </div>
           </main>
-          {!isSplit && (
+          {!isSplit && !panelOpen && (
             <>
               <ResizeHandle
                 side="right"
@@ -573,6 +644,42 @@ function AppShell() {
               </aside>
             </>
           )}
+          {panelOpen && (() => {
+            // Highlights are keyed by absolute path; the welcome document has
+            // no path, so it has no highlights to list (deviation from the
+            // upstream's ":welcome" synthetic key).
+            const panelKey = activeTab?.filePath;
+            return (
+              <HighlightsPanel
+                filePath={activeTab?.filePath}
+                entries={panelKey ? resolutions.get(panelKey) ?? [] : []}
+                activeColour={activeColour}
+                onSetActive={setActiveColour}
+                onClose={() => setPanelOpen(false)}
+                onJump={(id) => {
+                  articles
+                    .get(state.activePaneId)
+                    ?.dispatchEvent(
+                      new CustomEvent("marque:scroll-to-highlight", { detail: id }),
+                    );
+                }}
+                onRemove={(id) => {
+                  if (!panelKey) return;
+                  const items = byFile[panelKey] ?? [];
+                  if (!items.some((h) => h.id === id)) return;
+                  removeHighlight(panelKey, id);
+                  // Marque's toasts carry no actions, so the undo lives in the
+                  // panel itself (5-second window).
+                  notifyApp("Highlight deleted — undo in the Highlights panel");
+                }}
+                onUpdateNote={(id, note) => {
+                  if (panelKey) updateHighlight(panelKey, id, { note });
+                }}
+                lastDeleted={lastDeleted}
+                onUndo={undoDelete}
+              />
+            );
+          })()}
         </div>
       </div>
       <CommandPalette
@@ -584,6 +691,7 @@ function AppShell() {
         isSplit={isSplit}
         folders={folders}
         onJumpToFolder={handleJumpToFolder}
+        onToggleHighlights={handleToggleHighlights}
       />
     </div>
   );
@@ -598,10 +706,12 @@ export default function App() {
   return (
     <ThemeProvider>
       <PreferencesProvider>
-        <TooltipProvider delayDuration={300}>
-          <AppShell />
-          <Notifications />
-        </TooltipProvider>
+        <HighlightsProvider>
+          <TooltipProvider delayDuration={300}>
+            <AppShell />
+            <Notifications />
+          </TooltipProvider>
+        </HighlightsProvider>
       </PreferencesProvider>
     </ThemeProvider>
   );

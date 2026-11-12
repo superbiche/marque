@@ -22,6 +22,7 @@ import {
   ZoomIn,
   ZoomOut,
   RotateCcw,
+  Highlighter,
 } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { useTheme, type Theme } from "@/lib/theme";
@@ -37,6 +38,7 @@ interface Props {
   isSplit: boolean;
   folders: Folder[];
   onJumpToFolder: (folderId: string) => void;
+  onToggleHighlights?: () => void;
 }
 
 export function CommandPalette({
@@ -48,6 +50,7 @@ export function CommandPalette({
   isSplit,
   folders,
   onJumpToFolder,
+  onToggleHighlights,
 }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -133,6 +136,17 @@ export function CommandPalette({
                 <CommandItem onSelect={handleCloseSplit}>
                   <X className="mr-2 h-4 w-4" />
                   Close Split
+                </CommandItem>
+              )}
+              {onToggleHighlights && (
+                <CommandItem
+                  onSelect={() => {
+                    onToggleHighlights();
+                    onOpenChange(false);
+                  }}
+                >
+                  <Highlighter className="mr-2 h-4 w-4" />
+                  Toggle Highlights Panel
                 </CommandItem>
               )}
               <CommandItem onSelect={() => setAppTheme("light")}>

@@ -7,11 +7,12 @@
 //! menu only when the page leaves it unhandled, so the frontend keydown
 //! handler ignores the keys the menu owns (see `src/lib/menuShortcuts.ts`).
 //!
-//! Custom items fire a `menu://action` event carrying their id. Two ids are
-//! handled here in Rust instead: `help_github` opens the project page and
-//! `close_window` closes the main window. Predefined items (About, Quit, Cut,
-//! …) run their native selector and never emit an event, so they never reach
-//! [`handle_event`].
+//! Custom items fire a `menu://action` event carrying their id. Three ids
+//! are handled here in Rust instead: `help_github` opens the project page,
+//! and `close_window` and `quit` both close the main window, which runs the
+//! highlights-flush interception in `lib.rs`. The remaining predefined
+//! items (About, Cut, …) run their native selector and never emit an event,
+//! so they never reach [`handle_event`].
 
 use tauri::menu::{Menu, MenuEvent, MenuItem, SubmenuBuilder, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, Manager, Wry};
@@ -24,6 +25,12 @@ use tauri_plugin_opener::OpenerExt;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     // App menu: the first submenu; macOS renders it bold under the app name.
+    // Quit is a custom item (not the predefined `.quit()`), so it fires a
+    // `menu://action` event that Rust handles by closing the main window —
+    // which runs the highlights-flush interception in `lib.rs`. The
+    // predefined item would have run the native terminate selector directly
+    // and skipped that flow.
+    let quit = MenuItem::with_id(app, "quit", "Quit Marque", true, Some("CmdOrCtrl+Q"))?;
     let app_menu = SubmenuBuilder::new(app, "Marque")
         .about(None)
         .separator()
@@ -33,7 +40,7 @@ pub(crate) fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .hide_others()
         .show_all()
         .separator()
-        .quit()
+        .item(&quit)
         .build()?;
 
     // File
@@ -117,14 +124,17 @@ pub(crate) fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
 /// Handle a menu event.
 ///
-/// Rust owns two ids directly; every other custom id is forwarded to the
+/// Rust owns three ids directly; every other custom id is forwarded to the
 /// frontend as a `menu://action` event whose payload is the id string.
 pub(crate) fn handle_event(app: &AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
         "help_github" => {
             let _ = app.opener().open_url("https://github.com/superbiche/marque", None::<&str>);
         }
-        "close_window" => {
+        // Both ids close the main window, which runs the highlights-flush
+        // interception in `lib.rs`; the app exits once that last window is
+        // destroyed.
+        "quit" | "close_window" => {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.close();
             }
