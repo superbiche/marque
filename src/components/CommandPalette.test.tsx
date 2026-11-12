@@ -148,6 +148,9 @@ describe("CommandPalette file results", () => {
     await until(() => searches.has("xyzzy"), "the 'xyzzy' search to be issued");
     expect(items().length).toBe(0);
     expect(document.querySelector("[cmdk-empty]")?.textContent).toBe("No results.");
+    // A `//` line left in JSX children (instead of a `{/* */}` comment) is
+    // rendered as visible text; the palette must never surface a stray "//".
+    expect(document.body.textContent).not.toContain("//");
     await pressEnter();
     expect(onOpenFile).toHaveBeenCalledTimes(1);
 

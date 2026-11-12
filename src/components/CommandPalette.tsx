@@ -252,9 +252,9 @@ export function CommandPalette({
           </CommandGroup>
         )}
 
-        // Only files for the current query: a batch computed for an earlier
-        // query stays in state (its new search is still in flight) but must
-        // not be rendered or selectable in the meantime.
+        {/* Only files for the current query: a batch computed for an earlier
+            query stays in state (its new search is still in flight) but must
+            not be rendered or selectable in the meantime. */}
         {resultsQuery === query && results.length > 0 && (
           <CommandGroup heading="Files">
             {results.map((r) => (
