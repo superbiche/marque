@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.12] - 2026-11-12
 
 ### Changed
 - Command palette: actions (theme, zoom, split panes, highlights panel, open file, add folder) are searchable while you type. Up to five matching actions show above the file results and Enter runs the selected one; with an empty query the full list shows as before. "highl" finds "Toggle Highlights Panel", "dark" finds "Theme: Dark".
