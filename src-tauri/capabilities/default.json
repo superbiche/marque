@@ -5,7 +5,6 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:webview:allow-print",
     "opener:default",
     "opener:allow-open-path",
     "dialog:default",
