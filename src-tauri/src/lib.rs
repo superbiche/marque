@@ -97,7 +97,9 @@ pub fn run() {
         // for real. The JS `onCloseRequested` API is deliberately not
         // used: its close path calls `destroy()`, which needs the
         // `core:window:allow-destroy` capability (a permission change).
-        // Cmd+Q / app quit bypasses this flow and exits like before.
+        // The macOS menu's Quit item (⌘Q) is a custom item that routes
+        // through this same flow (see `menu.rs`). Dock "Quit" and OS
+        // logout terminate the process directly and bypass it.
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;

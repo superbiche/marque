@@ -1,7 +1,7 @@
 use crate::cli::InitialTarget;
 use crate::error::{AppError, AppResult};
 use crate::folder::TreeNode;
-use crate::highlights::{Highlight, HighlightsFile};
+use crate::highlights::{Highlight, HighlightsFile, MAX_HIGHLIGHTS_PER_FILE, MAX_NOTE_CHARS};
 use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
 use crate::settings::{settings_dir, Folder, SettingsLoadStatus};
@@ -238,11 +238,6 @@ pub fn get_settings_load_status(
 ) -> SettingsLoadStatus {
     (*status).clone()
 }
-
-// Limits kept in one place; the frontend mirrors them in
-// `src/lib/highlights.ts` for early UI feedback.
-pub const MAX_HIGHLIGHTS_PER_FILE: usize = 2000;
-pub const MAX_NOTE_CHARS: usize = 4_000;
 
 /// The v2 highlights for one document path (empty when none).
 #[derive(serde::Serialize)]

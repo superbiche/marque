@@ -139,7 +139,8 @@ export function onHighlightsFlushRequest(cb: () => void): Promise<UnlistenFn> {
 
 /**
  * Ids the native macOS menu can emit (see `src-tauri/src/menu.rs`).
- * `help_github` and `close_window` are handled in Rust and never arrive.
+ * `help_github`, `close_window` and `quit` are handled in Rust and never
+ * arrive.
  */
 export type MenuActionId =
   | "open_file"

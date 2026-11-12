@@ -12,8 +12,21 @@
 //! in `<settings_dir>/highlights.key` (created on first use, mode 0600 on
 //! Unix) so the same passage hashes differently on each machine; copying
 //! `highlights.json` without the key leaves the highlights unresolvable
-//! (their notes are kept). The selected text itself is never written; only
-//! the user's own `note` is stored.
+//! (they are listed as not found; their notes are kept). The selected text
+//! itself is never written; only the user's own `note` is stored.
+//!
+//! **Load-time filtering (F10):** every stored entry must pass the same
+//! checks `save_highlights` enforces (plus the note-length cap); each path
+//! is capped at `MAX_HIGHLIGHTS_PER_FILE` entries; non-absolute path keys
+//! are dropped. When anything is dropped the *original* file is first
+//! *copied* (never renamed) to `highlights.json.invalid-<timestamp>`
+//! (0600 on Unix) so a later save cannot destroy the user's data; the live
+//! file stays, and every subsequent load re-filters it.
+//!
+//! **Key handling (S3):** an existing valid key file is tightened to 0600
+//! before use (a failed tightening is a hard error — the key is not used);
+//! its temp file is removed if stale and created fresh (0600,
+//! fail-if-exists); every corrupt/invalid backup is 0600 on Unix.
 
 use crate::error::AppResult;
 use parking_lot::Mutex;
@@ -31,6 +44,12 @@ pub const CURRENT_VERSION: u32 = 2;
 /// `src/lib/highlights.ts` for early feedback.
 pub const MAX_PASSAGE_LENGTH: u32 = 100_000;
 pub const MAX_START_OFFSET: u32 = 10_000_000;
+/// A path holds at most this many highlights; `load` drops what is over
+/// it (the frontend mirrors this constant for early UI feedback).
+pub const MAX_HIGHLIGHTS_PER_FILE: usize = 2000;
+/// A stored note must not exceed this many characters; `load` drops what
+/// is over it.
+pub const MAX_NOTE_CHARS: usize = 4_000;
 
 /// Serialised as a plain word ("yellow", …). An unknown value makes the
 /// whole file fail to parse, which routes it through the corrupt-file
@@ -120,6 +139,15 @@ impl HighlightsFile {
     /// never the value (which may hold anything); the rest of the store is
     /// kept. Warnings never echo `serde_json` error text either, because
     /// it quotes the offending string.
+    ///
+    /// F10: on top of entry validation, a path holds at most
+    /// `MAX_HIGHLIGHTS_PER_FILE` entries (the excess is truncated), notes
+    /// over `MAX_NOTE_CHARS` characters are dropped (via `entry_problem`),
+    /// and non-absolute path keys are dropped. When anything is dropped
+    /// the *original* file is first *copied* (never renamed) to
+    /// `highlights.json.invalid-<timestamp>` (0600 on Unix) so a later
+    /// save cannot destroy the user's data; the live file stays and is
+    /// re-filtered on every subsequent load.
     pub fn load(dir: &Path) -> AppResult<HighlightsFile> {
         let p = dir.join(FILE_NAME);
         if !p.exists() {
@@ -153,11 +181,30 @@ impl HighlightsFile {
                     );
                     return Ok(Self::default());
                 }
-                let mut invalid = 0;
-                file.files.retain(|_path, list| {
+                // F10: drop what no longer passes the save-time contract.
+                // (a) non-absolute path keys — saves only ever write
+                //     absolute paths, so these are hand-edits or leftovers;
+                // (b) over the per-path cap (truncated);
+                // (c) entries failing `entry_problem`, including notes
+                //     over `MAX_NOTE_CHARS`.
+                let mut dropped_paths = 0;
+                file.files.retain(|path, _| {
+                    let keep = Path::new(path).is_absolute();
+                    if !keep {
+                        dropped_paths += 1;
+                    }
+                    keep
+                });
+                let mut truncated = 0;
+                let mut dropped_entries = 0;
+                for (_path, list) in file.files.iter_mut() {
+                    if list.len() > MAX_HIGHLIGHTS_PER_FILE {
+                        truncated += list.len() - MAX_HIGHLIGHTS_PER_FILE;
+                        list.truncate(MAX_HIGHLIGHTS_PER_FILE);
+                    }
+                    let before = list.len();
                     list.retain(|h| match entry_problem(h) {
                         Some(problem) => {
-                            invalid += 1;
                             eprintln!(
                                 "marque: highlights: dropped an invalid entry ({problem}) at \
                                  line {}, offset {}",
@@ -167,8 +214,29 @@ impl HighlightsFile {
                         }
                         None => true,
                     });
-                    !list.is_empty()
-                });
+                    dropped_entries += before - list.len();
+                }
+                // When anything is dropped, keep the original as a 0600
+                // *copy* (not a rename) so a later save cannot destroy the
+                // user's data; the live file stays and is re-filtered on
+                // every subsequent load.
+                if dropped_paths + truncated + dropped_entries > 0 {
+                    match copy_with_suffix(&p, "invalid") {
+                        Ok(backup) => eprintln!(
+                            "marque: highlights: filtered on load ({} invalid entries, {} over \
+                             the per-file cap, {} non-absolute paths); the original was kept \
+                             at {}",
+                            dropped_entries, truncated, dropped_paths, backup.display()
+                        ),
+                        Err(err) => eprintln!(
+                            "marque: highlights: filtered on load but failed to keep a backup \
+                             of {}: {err:#}",
+                            p.display()
+                        ),
+                    }
+                }
+                // Drop paths left empty by the filtering.
+                file.files.retain(|_, list| !list.is_empty());
                 Ok(file)
             }
             Err(_) => {
@@ -216,10 +284,31 @@ impl HighlightsFile {
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 static RMW_LOCK: Mutex<()> = Mutex::new(());
 
+/// Tighten a secret-bearing file (the key, its temp file, every
+/// corrupt/invalid backup) to owner-only 0600 on Unix; a no-op elsewhere.
+/// A permission failure is a propagated error, never swallowed.
+fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(path)?;
+        let mode = (meta.permissions().mode() & !0o777) | 0o600;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
+
 fn preserve_corrupt(path: &Path) -> AppResult<PathBuf> {
     preserve_with_suffix(path, "corrupt")
 }
 
+/// Move `path` to `path` with a `.suffix-<timestamp>` suffix, then
+/// restrict the backup to owner-only 0600 (Unix) — it may hold user notes,
+/// which can be sensitive.
 fn preserve_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -235,6 +324,34 @@ fn preserve_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
         let candidate = path.with_file_name(label);
         if !candidate.exists() {
             std::fs::rename(path, &candidate)?;
+            restrict_to_owner(&candidate)?;
+            return Ok(candidate);
+        }
+        trial += 1;
+    }
+}
+
+/// Copy `path` to `path` with a `.suffix-<timestamp>` suffix, then restrict
+/// the copy to owner-only 0600 (Unix). A copy, never a rename: the live
+/// file must stay in place for the F10 flow, where `load` filters it and
+/// every subsequent load re-filters it, while the original is preserved
+/// against later saves.
+fn copy_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let mut trial = 0_u32;
+    loop {
+        let label = if trial == 0 {
+            format!("{FILE_NAME}.{suffix}-{timestamp}")
+        } else {
+            format!("{FILE_NAME}.{suffix}-{timestamp}-{trial}")
+        };
+        let candidate = path.with_file_name(label);
+        if !candidate.exists() {
+            std::fs::copy(path, &candidate)?;
+            restrict_to_owner(&candidate)?;
             return Ok(candidate);
         }
         trial += 1;
@@ -251,10 +368,15 @@ static KEY_LOCK: Mutex<()> = Mutex::new(());
 /// `<settings_dir>/highlights.key`. The key never appears in
 /// `highlights.json` (references-only rule).
 ///
-/// The key file is created on the first call (temp file + rename, mode
-/// 0600 on Unix). A file that is not exactly 32 lowercase hex characters
-/// is backed up to `highlights.key.corrupt-<timestamp>` (mode 0600 — it may
-/// hold a previously working key, i.e. a secret) and replaced; the
+/// The key file is created on the first call: any stale temp file from a
+/// crashed run is removed, then a fresh temp file (0600 on Unix,
+/// fail-if-exists) is written and renamed into place, so the key is never
+/// observable with broader permissions and no other process can plant a
+/// file under the temp name. An existing valid key file is tightened to
+/// 0600 before use; a failed tightening is a hard error and the key is
+/// not used. A file that is not exactly 32 lowercase hex characters is
+/// backed up to `highlights.key.corrupt-<timestamp>` (0600 on Unix — it
+/// may hold a previously working key, i.e. a secret) and replaced; the
 /// warning names the situation only, never the file contents.
 pub fn get_key(dir: &Path) -> AppResult<String> {
     let _guard = KEY_LOCK.lock();
@@ -262,6 +384,9 @@ pub fn get_key(dir: &Path) -> AppResult<String> {
     let path = dir.join(KEY_NAME);
     let existing = std::fs::read_to_string(&path).ok().filter(|k| is_valid_key(k));
     if let Some(key) = existing {
+        // A key file that drifted to a wider mode is tightened before use;
+        // a failed tightening is a hard error — the key is not used.
+        restrict_to_owner(&path)?;
         return Ok(key.trim().to_string());
     }
 
@@ -277,6 +402,10 @@ pub fn get_key(dir: &Path) -> AppResult<String> {
     }
     let key = generate_key();
     let tmp = dir.join(format!("{KEY_NAME}.tmp.{}", std::process::id()));
+    // Never inherit a stale temp file from a crashed run (it may hold a
+    // key, or be a world-writable target someone planted): remove it,
+    // then create the temp fresh and fail if it exists again.
+    let _ = std::fs::remove_file(&tmp);
     // Write to a temp file with the final mode before renaming it into
     // place, so the key is never observable with broader permissions.
     #[cfg(unix)]
@@ -285,8 +414,7 @@ pub fn get_key(dir: &Path) -> AppResult<String> {
         use std::os::unix::fs::OpenOptionsExt;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
             .open(&tmp)?;
         file.write_all(key.as_bytes())?;
@@ -342,11 +470,10 @@ fn preserve_corrupt_key(path: &Path) -> AppResult<Option<PathBuf>> {
         let candidate = path.with_file_name(label);
         if !candidate.exists() {
             std::fs::rename(path, &candidate)?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o600));
-            }
+            // The backup may hold a previously working key (a secret), so
+            // tightening it to 0600 is part of the contract; a failure
+            // propagates instead of being swallowed.
+            restrict_to_owner(&candidate)?;
             return Ok(Some(candidate));
         }
         trial += 1;
@@ -355,7 +482,8 @@ fn preserve_corrupt_key(path: &Path) -> AppResult<Option<PathBuf>> {
 
 /// Structural validation for a stored entry. The file is user-mutable
 /// (hand-edited, merged across machines), so every entry is checked on
-/// load and again on save. Returns a category label only — the message
+/// load and again on save. The note cap is checked here too, so load and
+/// save share one rule (F10). Returns a category label only — the message
 /// built from it must never echo the entry's values.
 pub fn entry_problem(h: &Highlight) -> Option<&'static str> {
     if h.id.parse::<uuid::Uuid>().is_err() {
@@ -377,6 +505,12 @@ pub fn entry_problem(h: &Highlight) -> Option<&'static str> {
     }
     if h.anchor.start_offset > MAX_START_OFFSET {
         return Some("out-of-range offset");
+    }
+    if h.note
+        .as_deref()
+        .is_some_and(|note| note.chars().count() > MAX_NOTE_CHARS)
+    {
+        return Some("note too long");
     }
     for ts in [&h.created_at, &h.updated_at] {
         if ts.len() > 40 || !looks_like_rfc3339(ts) {
@@ -773,6 +907,53 @@ mod tests {
         assert!(path.exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_valid_key_with_a_wider_mode_is_tightened_before_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(KEY_NAME);
+        std::fs::write(&path, "0123456789abcdef0123456789abcdef\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let key = get_key(dir.path()).unwrap();
+        // The same key is reused (not regenerated)…
+        assert_eq!(key, "0123456789abcdef0123456789abcdef");
+        // …and the file is now owner-only, with no corrupt backup.
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let entries: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec![KEY_NAME.to_string()]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_stale_key_temp_file_is_removed_before_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        // A leftover temp from a crashed run, left with a wide mode.
+        let tmp = dir.path().join(format!("{KEY_NAME}.tmp.{}", std::process::id()));
+        std::fs::write(&tmp, "stale secret bytes\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let key = get_key(dir.path()).unwrap();
+        assert_eq!(key.len(), 32);
+        let path = dir.path().join(KEY_NAME);
+        assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), key);
+        // The stale temp is consumed by the rename: nothing is left behind,
+        // and the new key file is owner-only.
+        assert!(!tmp.exists());
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
     // --- entry validation (contract hardening) ---
 
     fn valid_entry() -> Highlight {
@@ -833,6 +1014,15 @@ mod tests {
     }
 
     #[test]
+    fn entry_validation_rejects_an_over_long_note_and_keeps_a_max_length_one() {
+        let mut e = valid_entry();
+        e.note = Some("a".repeat(MAX_NOTE_CHARS));
+        assert_eq!(entry_problem(&e), None);
+        e.note = Some("a".repeat(MAX_NOTE_CHARS + 1));
+        assert_eq!(entry_problem(&e), Some("note too long"));
+    }
+
+    #[test]
     fn rfc3339_shape_accepts_iso_and_offset_forms() {
         assert!(looks_like_rfc3339("2026-04-29T00:00:00.000Z"));
         assert!(looks_like_rfc3339("2026-04-29T00:00:00Z"));
@@ -869,6 +1059,116 @@ mod tests {
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
         assert!(loaded.files.is_empty());
+    }
+
+    // --- F10: load-time filtering with original backup ---
+
+    fn invalid_backups(dir: &Path) -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("highlights.json.invalid-"))
+            .collect()
+    }
+
+    #[cfg(unix)]
+    fn assert_owner_only(p: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(p).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn load_drops_an_over_long_note_and_keeps_the_original_as_an_invalid_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut short = h("1", Colour::Yellow, 0, 1);
+        short.note = Some("a".repeat(MAX_NOTE_CHARS)); // exactly the cap: kept
+        let mut long = h("2", Colour::Blue, 3, 4);
+        long.note = Some("a".repeat(MAX_NOTE_CHARS + 1)); // one over: dropped
+        let mut file = HighlightsFile::default();
+        file.set("/a.md".into(), vec![long, short]);
+        file.save(dir.path()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        let loaded = HighlightsFile::load(dir.path()).unwrap();
+        let items = loaded.get("/a.md");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].id, id("1"));
+        assert_eq!(items[0].note, Some("a".repeat(MAX_NOTE_CHARS)));
+
+        // The live file is left intact (re-filtered on each later load).
+        let live: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(live["files"]["/a.md"].as_array().unwrap().len(), 2);
+
+        // A single owner-only copy of the original.
+        let backups = invalid_backups(dir.path());
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
+        #[cfg(unix)]
+        assert_owner_only(&backups[0]);
+    }
+
+    #[test]
+    fn load_truncates_a_path_over_the_per_file_cap_and_keeps_the_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let list: Vec<Highlight> = (0..=MAX_HIGHLIGHTS_PER_FILE)
+            .map(|i| {
+                let mut e = h("", Colour::Blue, 0, 1);
+                // Distinct, well-formed UUIDs per entry.
+                e.id = id(&format!("{i:08x}"));
+                e.anchor.start_offset = i as u32;
+                e
+            })
+            .collect();
+        let mut file = HighlightsFile::default();
+        file.set("/a.md".into(), list);
+        file.save(dir.path()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        let loaded = HighlightsFile::load(dir.path()).unwrap();
+        assert_eq!(loaded.get("/a.md").len(), MAX_HIGHLIGHTS_PER_FILE);
+
+        // The live file is left intact with the un-truncated list.
+        let live: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            live["files"]["/a.md"].as_array().unwrap().len(),
+            MAX_HIGHLIGHTS_PER_FILE + 1
+        );
+
+        let backups = invalid_backups(dir.path());
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
+        #[cfg(unix)]
+        assert_owner_only(&backups[0]);
+    }
+
+    #[test]
+    fn load_drops_non_absolute_path_keys_and_keeps_absolute_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut file = HighlightsFile::default();
+        file.set("relative/doc.md".into(), vec![h("1", Colour::Yellow, 0, 1)]);
+        file.set("/abs/doc.md".into(), vec![h("2", Colour::Blue, 0, 1)]);
+        file.save(dir.path()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        let loaded = HighlightsFile::load(dir.path()).unwrap();
+        assert!(!loaded.files.contains_key("relative/doc.md"));
+        assert_eq!(loaded.get("/abs/doc.md").len(), 1);
+        assert_eq!(loaded.get("/abs/doc.md")[0].id, id("2"));
+
+        let backups = invalid_backups(dir.path());
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
+        #[cfg(unix)]
+        assert_owner_only(&backups[0]);
     }
 
     #[test]

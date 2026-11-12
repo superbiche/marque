@@ -117,7 +117,10 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   const loadStatusRef = React.useRef<Map<string, HighlightLoadStatus>>(new Map());
   const saveTimersRef = React.useRef<Map<string, number>>(new Map());
   const inflightRef = React.useRef<Map<string, Promise<void>>>(new Map());
-  const dirtyRef = React.useRef<Set<string>>(new Set());
+  // One serialized writer per path: `gen` bumps on every mutation; `sent` is
+  // the generation last successfully persisted; `notified` keeps a failure
+  // streak to one notification. A path is pending while `sent < gen`.
+  const writerStateRef = React.useRef<Map<string, { gen: number; sent: number; notified: boolean }>>(new Map());
   const undoTimerRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
@@ -149,53 +152,68 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     };
   }, []);
 
-  // --- Saving ----------------------------------------------------------
+  // --- Saving (S1: one serialized writer per path) ----------------------
 
-  const doSaveRef = React.useRef<((path: string) => Promise<void>) | null>(null);
-
-  const doSave = React.useCallback((path: string): Promise<void> => {
-    // Dedupe concurrent saves for the same path (rapid mutations, a flush
-    // racing a debounce timer).
+  // One writer per path, driven by a generation counter. A mutation bumps the
+  // path's generation and resets the debounce; the writer persists the
+  // *current* snapshot, records the generation it sent, and loops while the
+  // generation moves on, so a mutation landing mid-save is never lost to a
+  // stale in-flight snapshot (F9). A failure leaves the path pending (the
+  // generation is not marked sent) and is retried by the next mutation or a
+  // flush, notifying at most once per failure streak.
+  const runWriter = React.useCallback((path: string): Promise<void> => {
     const existing = inflightRef.current.get(path);
-    if (existing) return existing;
+    if (existing) return existing; // a writer for this path is already running
 
-    const items = byFileRef.current[path];
     const promise: Promise<void> = (async () => {
-      if (items === undefined) {
-        dirtyRef.current.delete(path);
-        inflightRef.current.delete(path);
-        return;
-      }
-      // The whole list for this path goes to the backend; its
-      // `save_highlights` is a read-modify-write serialized process-wide, so
-      // concurrent saves from different documents cannot lose each other.
-      // An empty list is a real write (it deletes the path's highlights).
-      try {
-        await tauri.saveHighlights(path, items);
-        dirtyRef.current.delete(path);
-      } catch (err) {
-        // Keep it dirty: a later mutation or the close-flush retries it.
-        dirtyRef.current.add(path);
-        notifyApp(
-          `Couldn't save highlights for ${basenameOf(path)}. Will retry on the next change or when you close the window.`,
-        );
-        console.error("failed to save highlights", err);
+      for (;;) {
+        const st = writerStateRef.current.get(path);
+        if (!st || st.sent === st.gen) break; // clean
+        const items = byFileRef.current[path];
+        if (items === undefined) {
+          // No list to persist (never landed a load); nothing to save.
+          st.sent = st.gen;
+          break;
+        }
+        // The whole list for this path goes to the backend; its
+        // `save_highlights` is a read-modify-write serialized process-wide, so
+        // concurrent saves from different documents cannot lose each other.
+        // An empty list is a real write (it deletes the path's highlights).
+        const sentGen = st.gen;
+        try {
+          await tauri.saveHighlights(path, items);
+        } catch (err) {
+          // Keep the path pending: do not advance `sent`, so the next
+          // mutation or a flush retries it. Notify once per failure streak.
+          if (!st.notified) {
+            st.notified = true;
+            notifyApp(
+              `Couldn't save highlights for ${basenameOf(path)}. Will retry on the next change or when you close the window.`,
+            );
+            console.error("failed to save highlights", err);
+          }
+          break;
+        }
+        st.sent = sentGen;
+        st.notified = false;
+        // If the generation moved while we were in flight, loop and send the
+        // newest snapshot; otherwise the loop's next check breaks.
       }
       inflightRef.current.delete(path);
-      // Re-save only if the data changed while we were in flight (a failed
-      // save with unchanged data is retried by the next mutation/flush, not
-      // re-looped here).
-      if (dirtyRef.current.has(path) && byFileRef.current[path] !== items && doSaveRef.current) {
-        void doSaveRef.current(path);
-      }
     })();
     inflightRef.current.set(path, promise);
     return promise;
   }, []);
-  doSaveRef.current = doSave;
+
+  const runWriterRef = React.useRef(runWriter);
+  runWriterRef.current = runWriter;
 
   const scheduleSave = React.useCallback((path: string) => {
-    dirtyRef.current.add(path);
+    const st = writerStateRef.current.get(path);
+    if (!st) writerStateRef.current.set(path, { gen: 0, sent: 0, notified: false });
+    const s = writerStateRef.current.get(path)!;
+    s.gen += 1; // a new mutation: the path is pending until the writer catches up
+    s.notified = false;
     const timers = saveTimersRef.current;
     const existing = timers.get(path);
     if (existing !== undefined) window.clearTimeout(existing);
@@ -203,7 +221,7 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
       path,
       window.setTimeout(() => {
         timers.delete(path);
-        if (doSaveRef.current) void doSaveRef.current(path);
+        if (runWriterRef.current) void runWriterRef.current(path);
       }, SAVE_DEBOUNCE_MS),
     );
   }, []);
@@ -213,17 +231,16 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     const timers = saveTimersRef.current;
     for (const t of timers.values()) window.clearTimeout(t);
     timers.clear();
-    // Every path with a stored list and any dirty path. `doSave` dedupes
-    // in-flight saves and no-ops for an unchanged/clean path.
-    const paths = new Set<string>(dirtyRef.current);
-    for (const p of Object.keys(byFileRef.current)) paths.add(p);
+    // Only paths with a pending generation (sent < gen) have anything to
+    // persist. A loaded-but-never-mutated path already matches disk; a path
+    // with no list is skipped by the writer. Await each writer until it is
+    // clean or fails.
     const promises: Promise<void>[] = [];
-    for (const p of paths) {
-      if (byFileRef.current[p] === undefined) continue;
-      promises.push(doSave(p));
+    for (const [p, st] of writerStateRef.current) {
+      if (st.sent !== st.gen) promises.push(runWriter(p));
     }
     await Promise.all(promises);
-  }, [doSave]);
+  }, [runWriter]);
 
   const flushRef = React.useRef(flush);
   flushRef.current = flush;
@@ -361,9 +378,9 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
       for (const t of timers.values()) window.clearTimeout(t);
       timers.clear();
       if (undoTimerRef.current !== null) window.clearTimeout(undoTimerRef.current);
-      for (const p of dirtyRef.current) {
-        if (byFileRef.current[p] !== undefined && doSaveRef.current) {
-          void doSaveRef.current(p).catch(() => {});
+      for (const [p, st] of writerStateRef.current) {
+        if (st.sent !== st.gen && byFileRef.current[p] !== undefined) {
+          void runWriterRef.current(p).catch(() => {});
         }
       }
     };

@@ -38,6 +38,19 @@ export const HIGHLIGHT_FILE_VERSION = 2;
 /** Enforced by `save_highlights` (Rust); mirrored here for early UI feedback. */
 export const MAX_NOTE_LENGTH = 4000;
 export const MAX_HIGHLIGHTS_PER_FILE = 2000;
+/** Mirrors the `MAX_*` limits in `src-tauri/src/highlights.rs`; selections
+ *  beyond them cannot round-trip through `save_highlights`. */
+export const MAX_PASSAGE_LENGTH = 100_000;
+export const MAX_START_OFFSET = 10_000_000;
+
+/**
+ * Whether a normalized window fits the stored-window limits (Rust enforces
+ * the same bounds in `save_highlights` and drops anything else);
+ * `anchorFromSelection` refuses to anchor a window that does not fit.
+ */
+export function passageWithinLimits(startOffset: number, length: number): boolean {
+  return startOffset <= MAX_START_OFFSET && length <= MAX_PASSAGE_LENGTH;
+}
 
 export interface HighlightAnchor {
   /** [start, end) line range of the enclosing block's `data-source-map`. */
@@ -300,143 +313,171 @@ export function blockText(block: HTMLElement, container: HTMLElement): string {
 // (what `blockText` concatenates) may be *decomposed* (e.g. "cafe\u0301") and
 // may contain whitespace runs. A raw offset must therefore be mapped to the
 // NFC + collapsed coordinate space in ONE place so the stored anchor, the
-// resolution, and the DOM wrap all agree. The old `rawToNormMap` did only the
-// whitespace half and never NFC, so a decomposed passage's offset drifted by
-// the number of composed marks and the passage orphaned or shifted on the
-// next render.
+// resolution, and the DOM wrap all agree.
 //
-// `buildTextMap(raw)` returns `text` (the NFC + collapsed text, ===
-// `normalizeText(raw)`) and `forward[i]` = the number of normalized chars
-// produced by the raw prefix raw[0..i) (i in UTF-16 code units), with
-// `forward[raw.length] === text.length`. The inverse (DOM wrapping) is a
-// lower-bound search over `forward`.
+// The mapping is built on **grapheme clusters**: each cluster of the raw
+// text is NFC-normalized on its own, the per-cluster results are
+// concatenated, and whitespace is collapsed over them. For text whose
+// per-cluster NFC concatenation equals the whole-string NFC (any
+// well-formed combining arrangement), that is exactly `normalizeText(raw)`,
+// and every normalized character maps back to the cluster it came from, so
+// both directions land on cluster boundaries — never in the middle of a
+// composed character, for any script (no hand-listed combining ranges).
+//
+// When the two NFC results differ (a combining mark composing across a
+// cluster boundary) or the platform has no `Intl.Segmenter`, the map is
+// *unmappable*: `text` is empty, `anchorFromSelection` refuses to anchor,
+// and stored anchors on that block are treated as not found (orphaned).
+// Never a wrong range.
+//
+// `buildTextMap(raw)` returns `text` (the NFC + collapsed text) and
+// `forward[i]` = the number of normalized chars produced by the raw prefix
+// raw[0..i) (i in UTF-16 code units), with `forward[raw.length] ===
+// text.length`; `clusters` records each cluster's raw and normalized spans
+// for the inverse mapping.
 // ---------------------------------------------------------------------------
 
-/** A code point at `raw[i]`, with its UTF-16 length (1, or 2 for a surrogate pair). */
-function codePointAt(raw: string, i: number): { code: number; len: number } {
-  const hi = raw.charCodeAt(i);
-  if (hi >= 0xd800 && hi <= 0xdbff && i + 1 < raw.length) {
-    const lo = raw.charCodeAt(i + 1);
-    if (lo >= 0xdc00 && lo <= 0xdfff) {
-      return { code: 0x10000 + ((hi - 0xd800) << 10) + (lo - 0xdc00), len: 2 };
-    }
+/**
+ * Split `raw` into grapheme clusters (raw substring, raw start, and the
+ * cluster's own NFC normalization). `null` when the platform has no
+ * `Intl.Segmenter` — in that case no mapping can be guaranteed, so
+ * `buildTextMap` marks the block unmappable rather than risk a wrong range.
+ */
+function graphemeClusters(
+  raw: string,
+): { raw: string; rawStart: number; nfc: string }[] | null {
+  if (typeof Intl === "undefined" || typeof Intl.Segmenter !== "function") {
+    return null;
   }
-  return { code: hi, len: 1 };
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const segments = [...segmenter.segment(raw)];
+  const out: { raw: string; rawStart: number; nfc: string }[] = [];
+  for (let i = 0; i < segments.length; i++) {
+    const s = segments[i];
+    const end = i + 1 < segments.length ? segments[i + 1].index : raw.length;
+    const sub = raw.slice(s.index, end);
+    // A single code point is its own NFC form; only multi-code-point
+    // clusters (decomposed sequences, surrogate pairs) need the call.
+    out.push({ raw: sub, rawStart: s.index, nfc: sub.length === 1 ? sub : sub.normalize("NFC") });
+  }
+  return out;
 }
 
-/**
- * True if the code point is a combining mark (Unicode category M): it
- * continues a composition unit rather than starting one. We cover the common
- * diacritic ranges (Latin, Greek, Cyrillic, IPA, symbol marks). A miss on an
- * exotic script degrades gracefully (see `buildTextMap`).
- */
-function isCombiningMark(code: number): boolean {
-  return (
-    (code >= 0x0300 && code <= 0x036f) ||
-    (code >= 0x1ab0 && code <= 0x1aff) ||
-    (code >= 0x1dc0 && code <= 0x1dff) ||
-    (code >= 0x20d0 && code <= 0x20ff)
-  );
+export interface TextMapCluster {
+  /** Raw (code-unit) span of the cluster in `raw`. */
+  rawStart: number;
+  rawEnd: number;
+  /** Normalized (NFC + collapsed) span of the cluster in `text`. */
+  outStart: number;
+  outEnd: number;
 }
 
 export interface TextMap {
-  /** NFC + whitespace-collapsed text (=== `normalizeText(raw)`). */
+  /** NFC + whitespace-collapsed text (=== `normalizeText(raw)`); "" when
+   *  unmappable. */
   text: string;
   /** `forward[i]` = normalized chars in the raw prefix raw[0..i) (code units). */
   forward: Uint32Array;
   /** The raw (pre-NFC) text the map was built from. */
   raw: string;
+  /**
+   * Whether the raw text could be mapped to `text` without loss. When false
+   * (per-cluster NFC composition differs from whole-string NFC, or no
+   * `Intl.Segmenter`), `text` is empty and no anchor may use this map:
+   * anchoring returns `null`, and stored anchors on the block are treated
+   * as not found (orphaned) — never a wrong range.
+   */
+  mappable: boolean;
+  /** The cluster spans backing `mapInverse`; empty when unmappable. */
+  clusters: TextMapCluster[];
 }
 
 /** Build the single raw -> (NFC + whitespace-collapse) mapping for `raw`. */
 export function buildTextMap(raw: string): TextMap {
   const n = raw.length;
+  const zero = new Uint32Array(n + 1);
+  const unmappable = (): TextMap => ({
+    text: "",
+    forward: zero,
+    raw,
+    mappable: false,
+    clusters: [],
+  });
+
+  const clusters = graphemeClusters(raw);
+  if (!clusters) return unmappable(); // no Intl.Segmenter: no guaranteed mapping
+
+  // Gate: the per-cluster NFC must compose to the whole-string NFC. A
+  // violation means a combining mark composing across a cluster boundary —
+  // an arrangement that cannot be mapped without a wrong range.
+  let nfcLen = 0;
+  for (const c of clusters) nfcLen += c.nfc.length;
+  if (nfcLen !== raw.normalize("NFC").length) return unmappable();
+
+  // Pass 1: the concatenated per-cluster NFC string and, for every raw
+  // code-unit boundary, its position in that string. Identity clusters
+  // (nfc === raw, the overwhelmingly common case) map 1:1 with no
+  // normalize call; a normalizing cluster is short, so a per-prefix walk
+  // is cheap.
   const nfcOfRaw = new Uint32Array(n + 1);
-  let acc = 0; // NFC length of everything before the current unit
-  let i = 0;
-  while (i < n) {
-    const cp = codePointAt(raw, i);
-    const isComb = isCombiningMark(cp.code);
-    // A unit is a starter plus the combining marks that immediately follow it
-    // (a valid NFC composition unit). An isolated combining mark (no
-    // preceding starter in this walk) is its own one-char unit.
-    const cps: { code: number; len: number }[] = [cp];
-    let u = i + cp.len;
-    if (!isComb) {
-      while (u < n) {
-        const c2 = codePointAt(raw, u);
-        if (isCombiningMark(c2.code)) {
-          cps.push(c2);
-          u += c2.len;
-        } else {
-          break;
-        }
+  let nfcConcat = "";
+  for (const c of clusters) {
+    nfcOfRaw[c.rawStart] = nfcConcat.length;
+    if (c.nfc === c.raw) {
+      for (let b = 1; b < c.raw.length; b++) {
+        nfcOfRaw[c.rawStart + b] = nfcConcat.length + b;
       }
-    }
-    // Fill the boundaries of each code point in the unit: the boundary
-    // *before* it carries the NFC length of the unit prefix consumed so far
-    // (`prevLen`); the boundary *after* it carries the length once it is
-    // included. A lone code point is already NFC, so no normalize call is
-    // needed for the overwhelmingly common no-combining case.
-    let cursor = i;
-    let prefix = "";
-    let prevLen = 0;
-    for (const c of cps) {
-      for (let b = cursor; b < cursor + c.len; b++) nfcOfRaw[b] = acc + prevLen;
-      if (cps.length === 1) {
-        prevLen = 1;
-      } else {
-        prefix += String.fromCodePoint(c.code);
-        prevLen = prefix.length <= 1 ? 1 : prefix.normalize("NFC").length;
+      nfcOfRaw[c.rawStart + c.raw.length] = nfcConcat.length + c.raw.length;
+    } else {
+      let prefix = "";
+      for (let b = 0; b < c.raw.length; b++) {
+        nfcOfRaw[c.rawStart + b] = nfcConcat.length + prefix.normalize("NFC").length;
+        prefix += c.raw[b];
       }
-      nfcOfRaw[cursor + c.len] = acc + prevLen;
-      cursor = cursor + c.len;
+      nfcOfRaw[c.rawStart + c.raw.length] = nfcConcat.length + c.nfc.length;
     }
-    acc += raw.substring(i, u).normalize("NFC").length;
-    i = u;
+    nfcConcat += c.nfc;
   }
-  nfcOfRaw[n] = acc;
+  nfcOfRaw[n] = nfcConcat.length;
 
-  const nfcStr = raw.normalize("NFC");
-  if (nfcOfRaw[n] !== nfcStr.length) {
-    // The combining-range detection missed an exotic script. Fall back to a
-    // whitespace-only map over the raw text so `text` and `forward` stay
-    // mutually consistent; a decomposed passage in such a script then
-    // degrades to the pre-fix behaviour (a missed (a) match) rather than a
-    // corrupted offset.
-    const map = new Uint32Array(n + 1);
-    map[0] = 0;
-    let pos = 0;
-    for (let k = 0; k < n; k++) {
-      const inRun = k > 0 && /\s/.test(raw[k]) && /\s/.test(raw[k - 1]);
-      if (!inRun) pos++;
-      map[k + 1] = pos;
-    }
-    return { text: nfcStr, forward: map, raw };
-  }
-
-  // Whitespace-collapse over the NFC string (a run keeps its first space).
-  const collapsedOfNfc = new Uint32Array(nfcStr.length + 1);
+  // Pass 2: whitespace-collapse over the concatenated NFC (a run keeps its
+  // first space). `collapsedOfNfc[j]` = chars produced by nfcConcat[0..j).
+  const collapsedOfNfc = new Uint32Array(nfcConcat.length + 1);
   collapsedOfNfc[0] = 0;
   let inWs = false;
   let collapsed = "";
-  for (let j = 0; j < nfcStr.length; j++) {
-    const ws = /\s/.test(nfcStr[j]);
+  for (let j = 0; j < nfcConcat.length; j++) {
+    const ws = /\s/.test(nfcConcat[j]);
     if (ws) {
       if (!inWs) {
         collapsed += " ";
         inWs = true;
       }
     } else {
-      collapsed += nfcStr[j];
+      collapsed += nfcConcat[j];
       inWs = false;
     }
     collapsedOfNfc[j + 1] = collapsed.length;
   }
 
+  // Belt and braces: the result must be exactly `normalizeText(raw)`; any
+  // remaining discrepancy means the per-cluster NFC differs in code points
+  // (not just length) and the block is unmappable rather than wrong.
+  if (collapsed !== normalizeText(raw)) return unmappable();
+
   const forward = new Uint32Array(n + 1);
   for (let k = 0; k <= n; k++) forward[k] = collapsedOfNfc[nfcOfRaw[k]];
-  return { text: collapsed, forward, raw };
+
+  const clusterSpans: TextMapCluster[] = [];
+  for (const c of clusters) {
+    clusterSpans.push({
+      rawStart: c.rawStart,
+      rawEnd: c.rawStart + c.raw.length,
+      outStart: collapsedOfNfc[nfcOfRaw[c.rawStart]],
+      outEnd: collapsedOfNfc[nfcOfRaw[c.rawStart + c.raw.length]],
+    });
+  }
+  return { text: collapsed, forward, raw, mappable: true, clusters: clusterSpans };
 }
 
 /** Normalized (NFC + collapsed) offset for a raw code-unit offset. */
@@ -447,33 +488,25 @@ export function mapForward(map: TextMap, rawIndex: number): number {
 }
 
 /**
- * Raw code-unit offset for a normalized offset: the first raw position whose
- * normalized prefix has reached `normIndex`, then advanced to the end of its
- * composition unit if that position lands inside one (on a combining mark).
- * The result is always a unit boundary: a window ending on a composed
- * character (e.g. "café") wraps the starter *and* its marks, and a window
- * that starts after a composed character starts at the following starter,
- * never on a bare combining mark. Used to wrap the DOM text corresponding
- * to a normalized window.
+ * Raw code-unit offset for a normalized offset. The offset is assigned to
+ * the grapheme cluster that owns it (clusters with a normalized span tile
+ * the normalized text exactly): a boundary on a cluster's start lands on
+ * the cluster's raw start, a boundary inside a cluster snaps to the
+ * cluster's raw end. The result is always a cluster boundary: a window
+ * ending on a composed character (e.g. "café") wraps the starter *and* its
+ * marks, and a window starting after a composed character starts at the
+ * following starter, never on a bare combining mark. Used to wrap the DOM
+ * text corresponding to a normalized window.
  */
 export function mapInverse(map: TextMap, normIndex: number): number {
-  const f = map.forward;
   if (normIndex <= 0) return 0;
-  if (normIndex >= f[f.length - 1]) return f.length - 1;
-  let lo = 0;
-  let hi = f.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi) >> 1;
-    if (f[mid] < normIndex) lo = mid + 1;
-    else hi = mid;
+  if (normIndex >= map.text.length) return map.raw.length;
+  for (const c of map.clusters) {
+    if (c.outStart <= normIndex && normIndex < c.outEnd) {
+      return normIndex === c.outStart ? c.rawStart : c.rawEnd;
+    }
   }
-  let i = lo;
-  while (i < map.raw.length) {
-    const { code, len } = codePointAt(map.raw, i);
-    if (!isCombiningMark(code)) break;
-    i += len;
-  }
-  return i;
+  return map.raw.length;
 }
 
 /**
@@ -595,6 +628,7 @@ export function anchorFromSelection(
 
   const raw = blockText(block.element, container);
   const map = buildTextMap(raw);
+  if (!map.mappable) return null; // unmappable block: never a wrong range
   const start = rawOffsetOf(block.element, container, range.startContainer, range.startOffset);
   const end = rawOffsetOf(block.element, container, range.endContainer, range.endOffset);
   if (start >= end) return null;
@@ -603,6 +637,9 @@ export function anchorFromSelection(
   const endOffset = mapForward(map, end);
   const passage = map.text.slice(startOffset, endOffset);
   if (!passage) return null;
+  // The Rust side refuses these in `save_highlights`; refuse them at anchor
+  // time too (F6).
+  if (!passageWithinLimits(startOffset, passage.length)) return null;
 
   return {
     startLine: block.start,

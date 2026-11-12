@@ -42,10 +42,11 @@ export function clearAllHighlights(container: HTMLElement): void {
 
 /**
  * Map a window of the block's normalized text back to a raw (un-collapsed)
- * character span. The inverse of the anchoring mapping: a normalized
- * position that falls inside a collapsed whitespace run maps back to the
- * first raw character of that run, so the span reproduces the original
- * selection as closely as the normalization allows.
+ * character span. The inverse of the anchoring mapping: a boundary on a
+ * grapheme cluster's normalized start lands on the cluster's raw start, a
+ * boundary inside a cluster snaps to the cluster's raw end, and a boundary
+ * past a collapsed whitespace run lands on the run's last character — so
+ * the span reproduces the original selection (whole runs included).
  */
 function rawRangeOf(
   block: MappedBlock,
@@ -55,7 +56,7 @@ function rawRangeOf(
   const map = block.map;
   const normLen = map.text.length;
   if (start < 0 || end > normLen || end <= start) return null;
-  // `mapInverse` is the unit-boundary inverse of the single raw ->
+  // `mapInverse` is the cluster-boundary inverse of the single raw ->
   // normalized map, so a window that spans a composed (NFC) or collapsed
   // sequence wraps exactly the raw characters that produced it — including
   // a composed character's combining marks when the window ends on it.

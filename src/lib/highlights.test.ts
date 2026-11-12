@@ -16,6 +16,7 @@ import {
   mapInverse,
   newHighlightId,
   normalizeText,
+  passageWithinLimits,
   resolutionToEntries,
   resolveAnchors,
   sectionHeadingForRange,
@@ -115,19 +116,88 @@ describe("siphash24Hex", () => {
     expect(a).toMatch(/^[0-9a-f]{16}$/);
   });
 
-  it("matches the known SipHash-2-4 vectors (siphasher-1.0.3 reference table, key 00 01 … 0f)", () => {
-    // Entries 0, 1, 8, 15 of `test_siphash_2_4` in siphasher 1.0.3 — the
-    // values specified for the highlights store: message = the byte
-    // sequence 0, 1, …, len-1. The table stores each digest as 8
-    // little-endian bytes; the spec hex reads those bytes MSB-first.
-    expect(siphash24Hex(new Uint8Array(0), TEST_KEY)).toBe("726fdb47dd0e0e31");
-    expect(siphash24Hex(new Uint8Array([0]), TEST_KEY)).toBe("74f839c593dc67fd");
-    expect(
-      siphash24Hex(Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7]), TEST_KEY),
-    ).toBe("93f5f5799a932462");
-    expect(
-      siphash24Hex(Uint8Array.from([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]), TEST_KEY),
-    ).toBe("a129ca6149be45e5");
+  it("matches all 64 vectors of the siphasher-1.0.3 reference table (key 00 01 … 0f)", () => {
+    // The complete `test_siphash_2_4` table from siphasher-1.0.3
+    // (src/tests.rs), transcribed verbatim: entry t is the SipHash-2-4
+    // digest of the byte sequence 0, 1, …, t-1 under key 00 01 … 0f,
+    // stored as 8 little-endian digest bytes. The canonical hex this
+    // implementation produces reads those bytes MSB-first — i.e. the
+    // table entry reversed — which the loop below applies.
+    const vecs: [number, number, number, number, number, number, number, number][] = [
+      [0x31, 0x0e, 0x0e, 0xdd, 0x47, 0xdb, 0x6f, 0x72],
+      [0xfd, 0x67, 0xdc, 0x93, 0xc5, 0x39, 0xf8, 0x74],
+      [0x5a, 0x4f, 0xa9, 0xd9, 0x09, 0x80, 0x6c, 0x0d],
+      [0x2d, 0x7e, 0xfb, 0xd7, 0x96, 0x66, 0x67, 0x85],
+      [0xb7, 0x87, 0x71, 0x27, 0xe0, 0x94, 0x27, 0xcf],
+      [0x8d, 0xa6, 0x99, 0xcd, 0x64, 0x55, 0x76, 0x18],
+      [0xce, 0xe3, 0xfe, 0x58, 0x6e, 0x46, 0xc9, 0xcb],
+      [0x37, 0xd1, 0x01, 0x8b, 0xf5, 0x00, 0x02, 0xab],
+      [0x62, 0x24, 0x93, 0x9a, 0x79, 0xf5, 0xf5, 0x93],
+      [0xb0, 0xe4, 0xa9, 0x0b, 0xdf, 0x82, 0x00, 0x9e],
+      [0xf3, 0xb9, 0xdd, 0x94, 0xc5, 0xbb, 0x5d, 0x7a],
+      [0xa7, 0xad, 0x6b, 0x22, 0x46, 0x2f, 0xb3, 0xf4],
+      [0xfb, 0xe5, 0x0e, 0x86, 0xbc, 0x8f, 0x1e, 0x75],
+      [0x90, 0x3d, 0x84, 0xc0, 0x27, 0x56, 0xea, 0x14],
+      [0xee, 0xf2, 0x7a, 0x8e, 0x90, 0xca, 0x23, 0xf7],
+      [0xe5, 0x45, 0xbe, 0x49, 0x61, 0xca, 0x29, 0xa1],
+      [0xdb, 0x9b, 0xc2, 0x57, 0x7f, 0xcc, 0x2a, 0x3f],
+      [0x94, 0x47, 0xbe, 0x2c, 0xf5, 0xe9, 0x9a, 0x69],
+      [0x9c, 0xd3, 0x8d, 0x96, 0xf0, 0xb3, 0xc1, 0x4b],
+      [0xbd, 0x61, 0x79, 0xa7, 0x1d, 0xc9, 0x6d, 0xbb],
+      [0x98, 0xee, 0xa2, 0x1a, 0xf2, 0x5c, 0xd6, 0xbe],
+      [0xc7, 0x67, 0x3b, 0x2e, 0xb0, 0xcb, 0xf2, 0xd0],
+      [0x88, 0x3e, 0xa3, 0xe3, 0x95, 0x67, 0x53, 0x93],
+      [0xc8, 0xce, 0x5c, 0xcd, 0x8c, 0x03, 0x0c, 0xa8],
+      [0x94, 0xaf, 0x49, 0xf6, 0xc6, 0x50, 0xad, 0xb8],
+      [0xea, 0xb8, 0x85, 0x8a, 0xde, 0x92, 0xe1, 0xbc],
+      [0xf3, 0x15, 0xbb, 0x5b, 0xb8, 0x35, 0xd8, 0x17],
+      [0xad, 0xcf, 0x6b, 0x07, 0x63, 0x61, 0x2e, 0x2f],
+      [0xa5, 0xc9, 0x1d, 0xa7, 0xac, 0xaa, 0x4d, 0xde],
+      [0x71, 0x65, 0x95, 0x87, 0x66, 0x50, 0xa2, 0xa6],
+      [0x28, 0xef, 0x49, 0x5c, 0x53, 0xa3, 0x87, 0xad],
+      [0x42, 0xc3, 0x41, 0xd8, 0xfa, 0x92, 0xd8, 0x32],
+      [0xce, 0x7c, 0xf2, 0x72, 0x2f, 0x51, 0x27, 0x71],
+      [0xe3, 0x78, 0x59, 0xf9, 0x46, 0x23, 0xf3, 0xa7],
+      [0x38, 0x12, 0x05, 0xbb, 0x1a, 0xb0, 0xe0, 0x12],
+      [0xae, 0x97, 0xa1, 0x0f, 0xd4, 0x34, 0xe0, 0x15],
+      [0xb4, 0xa3, 0x15, 0x08, 0xbe, 0xff, 0x4d, 0x31],
+      [0x81, 0x39, 0x62, 0x29, 0xf0, 0x90, 0x79, 0x02],
+      [0x4d, 0x0c, 0xf4, 0x9e, 0xe5, 0xd4, 0xdc, 0xca],
+      [0x5c, 0x73, 0x33, 0x6a, 0x76, 0xd8, 0xbf, 0x9a],
+      [0xd0, 0xa7, 0x04, 0x53, 0x6b, 0xa9, 0x3e, 0x0e],
+      [0x92, 0x59, 0x58, 0xfc, 0xd6, 0x42, 0x0c, 0xad],
+      [0xa9, 0x15, 0xc2, 0x9b, 0xc8, 0x06, 0x73, 0x18],
+      [0x95, 0x2b, 0x79, 0xf3, 0xbc, 0x0a, 0xa6, 0xd4],
+      [0xf2, 0x1d, 0xf2, 0xe4, 0x1d, 0x45, 0x35, 0xf9],
+      [0x87, 0x57, 0x75, 0x19, 0x04, 0x8f, 0x53, 0xa9],
+      [0x10, 0xa5, 0x6c, 0xf5, 0xdf, 0xcd, 0x9a, 0xdb],
+      [0xeb, 0x75, 0x09, 0x5c, 0xcd, 0x98, 0x6c, 0xd0],
+      [0x51, 0xa9, 0xcb, 0x9e, 0xcb, 0xa3, 0x12, 0xe6],
+      [0x96, 0xaf, 0xad, 0xfc, 0x2c, 0xe6, 0x66, 0xc7],
+      [0x72, 0xfe, 0x52, 0x97, 0x5a, 0x43, 0x64, 0xee],
+      [0x5a, 0x16, 0x45, 0xb2, 0x76, 0xd5, 0x92, 0xa1],
+      [0xb2, 0x74, 0xcb, 0x8e, 0xbf, 0x87, 0x87, 0x0a],
+      [0x6f, 0x9b, 0xb4, 0x20, 0x3d, 0xe7, 0xb3, 0x81],
+      [0xea, 0xec, 0xb2, 0xa3, 0x0b, 0x22, 0xa8, 0x7f],
+      [0x99, 0x24, 0xa4, 0x3c, 0xc1, 0x31, 0x57, 0x24],
+      [0xbd, 0x83, 0x8d, 0x3a, 0xaf, 0xbf, 0x8d, 0xb7],
+      [0x0b, 0x1a, 0x2a, 0x32, 0x65, 0xd5, 0x1a, 0xea],
+      [0x13, 0x50, 0x79, 0xa3, 0x23, 0x1c, 0xe6, 0x60],
+      [0x93, 0x2b, 0x28, 0x46, 0xe4, 0xd7, 0x06, 0x66],
+      [0xe1, 0x91, 0x5f, 0x5c, 0xb1, 0xec, 0xa4, 0x6c],
+      [0xf3, 0x25, 0x96, 0x5c, 0xa1, 0x6d, 0x62, 0x9f],
+      [0x57, 0x5f, 0xf2, 0x8e, 0x60, 0x38, 0x1b, 0xe5],
+      [0x72, 0x45, 0x06, 0xeb, 0x4c, 0x32, 0x8a, 0x95],
+    ];
+    expect(vecs).toHaveLength(64);
+    for (let t = 0; t < vecs.length; t++) {
+      const msg = Uint8Array.from({ length: t }, (_, i) => i);
+      const want = [...vecs[t]]
+        .reverse()
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+      expect(siphash24Hex(msg, TEST_KEY)).toBe(want);
+    }
   });
 
   it("is key-dependent (same message, different key -> different hash)", () => {
@@ -184,16 +254,104 @@ describe("buildTextMap / mapForward / mapInverse", () => {
     expect(mapInverse(map, map.text.length)).toBe(raw.length);
   });
 
-  it("collapsed whitespace maps forward and back to the first raw character of the run", () => {
+  it("collapsed whitespace maps forward and back across the whole run", () => {
     const raw = "a  b";
     const map = buildTextMap(raw);
     expect(map.text).toBe("a b");
     expect(mapForward(map, raw.length)).toBe(map.text.length);
-    // Normalized 2 is after the single collapsed space; the inverse lands on
-    // the first raw character of the (raw) whitespace run it came from.
+    // The two raw spaces produce one normalized space (position 1); "b" is
+    // normalized 2. A boundary at a cluster's start lands on that cluster's
+    // raw start, so the inverse of 2 is the "b" (raw 3) — a window ending at
+    // 2 wraps the whole raw run, not just its first space.
+    expect(mapForward(map, 2)).toBe(2);
+    expect(mapInverse(map, 1)).toBe(1);
+    expect(mapInverse(map, 2)).toBe(3);
+    expect(mapInverse(map, 3)).toBe(raw.length);
+  });
+
+  it("maps a Bengali standalone vowel sign 1:1 (a mark outside the old hand-listed ranges)", () => {
+    // U+09CE is a combining vowel sign with no base to compose with: one
+    // grapheme cluster, NFC-stable.
+    const raw = "\u09ce x";
+    const map = buildTextMap(raw);
+    expect(map.mappable).toBe(true);
+    expect(map.text).toBe("\u09ce x");
     expect(mapForward(map, 2)).toBe(2);
     expect(mapInverse(map, 2)).toBe(2);
-    expect(mapInverse(map, 3)).toBe(raw.length);
+  });
+
+  it("normalizes Hangul jamo as one grapheme cluster (L+V+T never split)", () => {
+    // The 3 jamo are one grapheme cluster; per-cluster NFC composes them
+    // where the platform composes them (full ICU -> one syllable; a
+    // reduced ICU leaves them uncomposed) — either way the cluster is
+    // never split across the mapping. The two spaces collapse to one.
+    const jamo = "\u1100\u1135\u115e";
+    const raw = `${jamo}  x`;
+    const map = buildTextMap(raw);
+    expect(map.mappable).toBe(true);
+    expect(map.text).toBe(jamo.normalize("NFC") + " x");
+    // The "x" is normalized at J+1 (J = the cluster's NFC length), and its
+    // raw start is 5 (3 jamo + the collapsed 2-space run).
+    expect(mapForward(map, 5)).toBe(map.text.length - 1);
+    expect(mapForward(map, raw.length)).toBe(map.text.length);
+    expect(mapInverse(map, map.text.length - 1)).toBe(5); // the "x"
+  });
+
+  it("keeps an emoji ZWJ family sequence as one cluster (code-unit identity)", () => {
+    const family = "👨\u200d👩\u200d👧\u200d👦";
+    const raw = `${family} x`;
+    const map = buildTextMap(raw);
+    expect(map.mappable).toBe(true);
+    expect(map.text).toBe(`${family} x`);
+    // The family is 11 code units (4 surrogate pairs + 3 ZWJ); a ZWJ
+    // sequence is NFC-stable, so the map is the identity and the family
+    // stays intact (never split mid-pair) in either direction.
+    expect(mapForward(map, 11)).toBe(11);
+    expect(mapForward(map, 12)).toBe(12);
+    expect(mapForward(map, raw.length)).toBe(map.text.length);
+    expect(mapInverse(map, 11)).toBe(11);
+    expect(mapInverse(map, 12)).toBe(12);
+  });
+
+  it("is unmappable when per-cluster NFC cannot equal whole-string NFC (never a wrong range)", () => {
+    // A segmenter that splits per code point (instead of per grapheme)
+    // normalizes "e" and "\u0301" separately: their concatenation (5
+    // code points) is not the whole-string NFC ("café x", 6 - 1). The
+    // gate must mark the map unmappable rather than produce a wrong
+    // offset.
+    const RealSegmenter = Intl.Segmenter;
+    class CodePointSegmenter {
+      segment(input: string) {
+        const out: { index: number }[] = [];
+        let i = 0;
+        for (const ch of input) {
+          out.push({ index: i });
+          i += ch.length;
+        }
+        return out;
+      }
+    }
+    (Intl as { Segmenter: unknown }).Segmenter =
+      CodePointSegmenter as unknown as typeof Intl.Segmenter;
+    try {
+      const map = buildTextMap("cafe\u0301 x");
+      expect(map.mappable).toBe(false);
+      expect(map.text).toBe("");
+    } finally {
+      (Intl as { Segmenter: unknown }).Segmenter = RealSegmenter;
+    }
+  });
+
+  it("is unmappable when the platform has no Intl.Segmenter (no guaranteed mapping)", () => {
+    const RealSegmenter = Intl.Segmenter;
+    (Intl as { Segmenter: unknown }).Segmenter = undefined;
+    try {
+      const map = buildTextMap("a  b");
+      expect(map.mappable).toBe(false);
+      expect(map.text).toBe("");
+    } finally {
+      (Intl as { Segmenter: unknown }).Segmenter = RealSegmenter;
+    }
   });
 });
 
@@ -375,6 +533,105 @@ describe("anchorFromSelection", () => {
     expect(anchor!.startOffset).toBe(4);
     expect(anchor!.length).toBe(4);
     expect(anchor!.hash).toBe(h("café"));
+  });
+
+  it("anchors a selection of 'x' following a Bengali standalone vowel sign", () => {
+    const root = makeContainer(`<p data-source-map="1,2">\u09ce x</p>`);
+    const range = select(root, "p", 2, 3);
+    const anchor = anchorFromSelection(range, root, TEST_KEY);
+    expect(anchor).not.toBeNull();
+    expect(anchor!.startOffset).toBe(2);
+    expect(anchor!.length).toBe(1);
+    expect(anchor!.hash).toBe(h("x"));
+  });
+
+  it("anchors a selection of 'x' after a Hangul syllable and a collapsed space run", () => {
+    const root = makeContainer(`<p data-source-map="1,2">가  x</p>`);
+    const range = select(root, "p", 3, 4);
+    const anchor = anchorFromSelection(range, root, TEST_KEY);
+    expect(anchor).not.toBeNull();
+    expect(anchor!.startOffset).toBe(2);
+    expect(anchor!.length).toBe(1);
+    expect(anchor!.hash).toBe(h("x"));
+  });
+
+  it("anchors a whole emoji ZWJ family selection as one cluster", () => {
+    const family = "👨\u200d👩\u200d👧\u200d👦";
+    const root = makeContainer(`<p data-source-map="1,2">${family} x</p>`);
+    const range = select(root, "p", 0, family.length);
+    const anchor = anchorFromSelection(range, root, TEST_KEY);
+    expect(anchor).not.toBeNull();
+    expect(anchor!.startOffset).toBe(0);
+    expect(anchor!.length).toBe(family.length); // 11 code units, intact
+    expect(anchor!.hash).toBe(h(family));
+  });
+
+  it("refuses to anchor an unmappable block, and orphans a stored anchor on it", () => {
+    const RealSegmenter = Intl.Segmenter;
+    class CodePointSegmenter {
+      segment(input: string) {
+        const out: { index: number }[] = [];
+        let i = 0;
+        for (const ch of input) {
+          out.push({ index: i });
+          i += ch.length;
+        }
+        return out;
+      }
+    }
+    (Intl as { Segmenter: unknown }).Segmenter =
+      CodePointSegmenter as unknown as typeof Intl.Segmenter;
+    try {
+      const root = makeContainer(`<p data-source-map="1,2">cafe\u0301 x</p>`);
+      const range = select(root, "p", 4, 5);
+      expect(anchorFromSelection(range, root, TEST_KEY)).toBeNull();
+      const { resolved, orphaned } = resolveAnchors(
+        root,
+        [
+          makeHighlight(
+            {
+              startLine: 1,
+              endLine: 2,
+              startOffset: 0,
+              length: 4,
+              hash: h("café"),
+            },
+            { id: "unmap-1" },
+          ),
+        ],
+        TEST_KEY,
+      );
+      expect(resolved).toHaveLength(0);
+      expect(orphaned).toHaveLength(1);
+      expect(orphaned[0].highlight.id).toBe("unmap-1");
+    } finally {
+      (Intl as { Segmenter: unknown }).Segmenter = RealSegmenter;
+    }
+  });
+
+  it("refuses a passage over MAX_PASSAGE_LENGTH (F6, mirrors save_highlights)", () => {
+    const big = "a".repeat(100_001);
+    const root = makeContainer(`<p data-source-map="1,2">${big}</p>`);
+    const range = select(root, "p", 0, big.length);
+    expect(anchorFromSelection(range, root, TEST_KEY)).toBeNull();
+  });
+
+  it("allows a passage of exactly MAX_PASSAGE_LENGTH", () => {
+    const big = "a".repeat(100_000);
+    const root = makeContainer(`<p data-source-map="1,2">${big}</p>`);
+    const range = select(root, "p", 0, big.length);
+    const anchor = anchorFromSelection(range, root, TEST_KEY);
+    expect(anchor).not.toBeNull();
+    expect(anchor!.startOffset).toBe(0);
+    expect(anchor!.length).toBe(100_000);
+  });
+
+  it("passageWithinLimits mirrors the Rust stored-window bounds (F6)", () => {
+    expect(passageWithinLimits(0, 100_000)).toBe(true);
+    expect(passageWithinLimits(100_000, 100_000)).toBe(true);
+    expect(passageWithinLimits(10_000_000, 1)).toBe(true);
+    expect(passageWithinLimits(10_000_001, 1)).toBe(false);
+    expect(passageWithinLimits(0, 100_001)).toBe(false);
   });
 });
 
@@ -720,6 +977,68 @@ describe("highlight span application (DOM)", () => {
     expect(span!.textContent).toBe("the passage");
     // The decomposed prefix is left intact, outside the span.
     expect(doc.querySelector("p")!.textContent).toBe("cafe\u0301 the passage");
+  });
+
+  it("wraps a selection following a Bengali standalone vowel sign as exactly 'x'", () => {
+    const doc = makeContainer(`<p data-source-map="1,2">\u09ce x</p>`);
+    const anchor: HighlightAnchor = {
+      startLine: 1,
+      endLine: 2,
+      startOffset: 2,
+      length: 1,
+      hash: h("x"),
+    };
+    const resolution = resolveAnchors(doc, [makeHighlight(anchor, { id: "bengali-1" })], TEST_KEY);
+    expect(resolution.resolved).toHaveLength(1);
+    expect(applyAllHighlights(doc, resolution)).toBe(1);
+    const span = doc.querySelector<HTMLSpanElement>(
+      `span.${HIGHLIGHT_CLASS}[data-highlight-id="bengali-1"]`,
+    );
+    expect(span).not.toBeNull();
+    expect(span!.textContent).toBe("x"); // exactly the selected char, not the mark
+    expect(doc.querySelector("p")!.textContent).toBe("\u09ce x");
+  });
+
+  it("wraps a selection after a Hangul syllable and collapsed spaces as exactly 'x'", () => {
+    const doc = makeContainer(`<p data-source-map="1,2">가  x</p>`);
+    const anchor: HighlightAnchor = {
+      startLine: 1,
+      endLine: 2,
+      startOffset: 2,
+      length: 1,
+      hash: h("x"),
+    };
+    const resolution = resolveAnchors(doc, [makeHighlight(anchor, { id: "hangul-1" })], TEST_KEY);
+    expect(resolution.resolved).toHaveLength(1);
+    expect(applyAllHighlights(doc, resolution)).toBe(1);
+    const span = doc.querySelector<HTMLSpanElement>(
+      `span.${HIGHLIGHT_CLASS}[data-highlight-id="hangul-1"]`,
+    );
+    expect(span).not.toBeNull();
+    expect(span!.textContent).toBe("x");
+    // The whole raw space run stays intact outside the span.
+    expect(doc.querySelector("p")!.textContent).toBe("가  x");
+  });
+
+  it("wraps an emoji ZWJ family selection as one span (cluster never split)", () => {
+    const family = "👨\u200d👩\u200d👧\u200d👦";
+    const doc = makeContainer(`<p data-source-map="1,2">${family} x</p>`);
+    const anchor: HighlightAnchor = {
+      startLine: 1,
+      endLine: 2,
+      startOffset: 0,
+      length: family.length, // 11 code units, never mid-pair
+      hash: h(family),
+    };
+    const resolution = resolveAnchors(doc, [makeHighlight(anchor, { id: "zwj-1" })], TEST_KEY);
+    expect(resolution.resolved).toHaveLength(1);
+    expect(applyAllHighlights(doc, resolution)).toBe(1);
+    const span = doc.querySelector<HTMLSpanElement>(
+      `span.${HIGHLIGHT_CLASS}[data-highlight-id="zwj-1"]`,
+    );
+    expect(span).not.toBeNull();
+    expect(span!.textContent).toBe(family);
+    expect(doc.querySelector("p")!.textContent).toBe(`${family} x`);
   });
 });
 
