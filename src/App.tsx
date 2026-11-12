@@ -451,7 +451,7 @@ function AppShell() {
       } else if (meta && (e.key === "\\" || e.key === "|")) {
         // Shift+\ reports "|" on US layouts.
         e.preventDefault();
-        handleAppAction(e.shiftKey ? "split_down" : "split_right");
+        handleAppAction(e.shiftKey || e.key === "|" ? "split_down" : "split_right");
       } else if (meta && k === "w") {
         e.preventDefault();
         handleAppAction("close_tab");
