@@ -142,15 +142,19 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // ceiling closes the window), so edits stay refused until the window
   // closes.
   const closingRef = React.useRef(false);
-  // The open "close without saving" offer: the per-path `gen` values at
-  // the moment of the last *failed* close-flush. The frontend is the
-  // source of truth for accepted edits (Rust only sees a save once it
-  // lands), so it alone can decide whether a later close may discard: a
-  // second close flushes; if it fails and no path's `gen` has moved since
-  // the snapshot (no edit accepted after the warning) the close confirms
-  // — the user was warned about exactly these changes. A moved `gen`
-  // records a fresh offer and the close is cancelled again. Cleared on
-  // every successful close-flush (nothing is left to close without).
+  // The open "close without saving" offer: the per-path `gen` values
+  // snapshotted when the "close the window again" warning for a failed
+  // close-flush is actually delivered (recorded in the same path, right
+  // before the notification — an attempt that goes stale before its cancel
+  // resolves never records one, so a warning that was never shown can
+  // never drive a discard). The frontend is the source of truth for
+  // accepted edits (Rust only sees a save once it lands), so it alone can
+  // decide whether a later close may discard: a second close flushes; if
+  // it fails and no path's `gen` has moved since the snapshot (no edit
+  // accepted after the warning) the close confirms — the user was warned
+  // about exactly these changes. A moved `gen` records a fresh offer and
+  // the close is cancelled again. Cleared on every successful close-flush
+  // (nothing is left to close without).
   const discardOfferRef = React.useRef<Map<string, number> | null>(null);
   // Monotonic token for close-flush handlers: bumped at the start of each
   // and captured by it. A new close cycle can only begin after the previous
@@ -486,9 +490,11 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // drops its 2-second "frontend dead" fallback and starts a 30-second
   // ceiling), then flush: on success we confirm the close (Rust destroys
   // the window) and clear any open discard offer. On failure we cancel
-  // the close and record a *discard offer* (the per-path `gen` values at
-  // the moment of the failed flush), telling the user to close the
-  // window again to close without saving them. The user's next close
+  // the close; once that cancel has resolved and this handler is still
+  // the latest we record a *discard offer* (the per-path `gen` values —
+  // the gate was up the whole time, so no edit has landed since the
+  // failed flush) and tell the user to close the window again to close
+  // without saving them. The user's next close
   // flushes again: a success confirms; a failure confirms only when no
   // accepted edit moved a `gen` since the offer (the user was warned
   // about exactly these changes — Rust alone could not tell, since a
@@ -498,8 +504,9 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // still be `Flushing`; its ceiling closes the window), so edits stay
   // refused until the window closes. Each handler carries an attempt
   // token: a stale completion (the previous cycle's cancel response
-  // landing after the next cycle has begun) logs and does nothing, so it
-  // can never clear the new cycle's gate or re-emit the warning.
+  // landing after the next cycle has begun) logs and does nothing — it
+  // can never clear the new cycle's gate, re-emit the warning, or
+  // record an offer that was never shown.
   React.useEffect(() => {
     if (!inTauri()) return;
     let unlisten: UnlistenFn | null = null;
@@ -544,8 +551,9 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
           // The flush failed. A discard offer is open (the user was
           // warned) and no accepted edit moved a `gen` since the
           // snapshot? Confirm the close: the user was told about exactly
-          // these unsaved changes. Otherwise record a fresh offer and
-          // cancel the close.
+          // these unsaved changes. Otherwise cancel the close and, once
+          // it has settled and this attempt is still the latest, record
+          // a fresh offer.
           const offer = discardOfferRef.current;
           if (offer !== null && !editsSince(offer)) {
             discardOfferRef.current = null;
@@ -555,7 +563,6 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
               // the 30-second ceiling destroys the window either way
             }
           } else {
-            discardOfferRef.current = generationsSnapshot();
             // Ask the native guard to cancel the close first (it
             // returns to `Idle` for the same cycle, so the next close
             // request is a fresh cycle that requests a flush again), and
@@ -570,6 +577,13 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
                 );
                 return;
               }
+              // Record the discard offer only here, in the same path as
+              // the warning about to be delivered: a stale attempt never
+              // gets here, so an offer the user was never warned about
+              // can never exist. The gate has been up since this request
+              // arrived, so no accepted edit has moved a `gen` since the
+              // failed flush — this snapshot is the warned state itself.
+              discardOfferRef.current = generationsSnapshot();
               closingRef.current = false;
               notifyApp(
                 "Couldn't save highlights. Close the window again to close without saving them.",
@@ -586,7 +600,9 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
               // the window either way): keep the gate up — clearing it
               // would accept mutations into a window that is about to
               // be destroyed — and tell the user the highlights are
-              // read-only until the window closes.
+              // read-only until the window closes. No discard offer is
+              // recorded: the "close again" warning was not delivered,
+              // so the user was warned about nothing.
               console.error("failed to cancel the close after a failed flush", err);
               notifyApp("Highlights are read-only until the window closes.");
             }

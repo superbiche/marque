@@ -828,8 +828,9 @@ describe("F7: the close flush", () => {
     const a2 = makeHighlight("a2");
     await loadFile(app.ctx, A, [a1]);
 
-    // Close A: the flush fails, the discard offer is recorded, and A's
-    // cancelClose *response* is held in flight.
+    // Close A: the flush fails and A's cancelClose *response* is held in
+    // flight — A's discard offer (and warning) are only recorded once
+    // that cancel resolves and A is still the latest.
     m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
     act(() => app.ctx.addHighlight(A, a2));
     await drainSaves(); // the edit's save fails: one streak notification
@@ -872,6 +873,58 @@ describe("F7: the close flush", () => {
     expect(m.confirmClose).toHaveBeenCalledTimes(1);
     expect(m.cancelClose).toHaveBeenCalledTimes(1);
     expect(m.notifyApp).toHaveBeenCalledTimes(1); // only the edit's streak notification
+    app.unmount();
+  });
+
+  it("a stale attempt never records a discard offer: the next failing close warns and cancels, then the third confirms", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves(); // the edit's save fails: one streak notification
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+
+    // Close A: the flush fails, but A's cancel response is held in
+    // flight — it goes stale before it lands and must never record a
+    // discard offer (the warning behind it was never delivered).
+    const ac = deferred<void>();
+    m.cancelClose.mockImplementationOnce(() => ac.promise);
+    m.flushListeners[0]();
+    await drainSaves(); // A's flush fails; A is awaiting its held cancel
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).toHaveBeenCalledTimes(1); // A's warning is still behind the held cancel
+
+    // Close B: the flush fails again. A's offer was never recorded, so
+    // B must not confirm a discard the user was never warned about — it
+    // cancels (its cancel resolves immediately) and warns, exactly once.
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.cancelClose).toHaveBeenCalledTimes(2);
+    expect(m.confirmClose).not.toHaveBeenCalled();
+    expect(m.notifyApp).toHaveBeenCalledTimes(2);
+    expect(m.notifyApp).toHaveBeenNthCalledWith(
+      2,
+      "Couldn't save highlights. Close the window again to close without saving them.",
+    );
+
+    // A's cancel response lands now — after B's handler has started. A is
+    // stale: no second warning, no offer touched, no gate touched.
+    ac.resolve(undefined);
+    await drainSaves();
+    expect(m.notifyApp).toHaveBeenCalledTimes(2);
+    expect(m.confirmClose).not.toHaveBeenCalled();
+
+    // Close C: no new edit since B's warning and the save still fails —
+    // the user was warned about exactly these changes, so the close
+    // confirms the discard.
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).toHaveBeenCalledTimes(1);
+    expect(m.cancelClose).toHaveBeenCalledTimes(2); // B's cancel was the last one
+    expect(m.notifyApp).toHaveBeenCalledTimes(2); // no new warning
     app.unmount();
   });
 });
