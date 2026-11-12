@@ -8,7 +8,10 @@
  * - F6: the per-note and per-file limits are enforced before the mutation.
  * - F7: `flush()` saves pending (unsaved) paths, awaits in-flight saves, and
  *   the close-request flow awaits the flush before letting the close through
- *   — including when the save fails.
+ *   — including when the save fails, where the store records a "close
+ *   without saving" offer (a snapshot of the per-path generations): the
+ *   next close confirms only if no edit was accepted since the warning
+ *   (or the save recovered), and a rejected cancel keeps the edit gate up.
  * - F9/F12: one save queue per path, no debounce — every mutation queues a
  *   save that sends the path's current list if it is newer than the last one
  *   persisted. Oracles: the reviewer's lifecycle sequence (a no-op save must
@@ -529,7 +532,7 @@ describe("F7: the close flush", () => {
     );
     expect(m.notifyApp).toHaveBeenNthCalledWith(
       2,
-      "Couldn't save highlights. Close the window again to close without saving.",
+      "Couldn't save highlights. Close the window again to close without saving them.",
     );
 
     // The next mutation retries the save (which now succeeds).
@@ -645,7 +648,7 @@ describe("F7: the close flush", () => {
     expect(m.confirmClose).not.toHaveBeenCalled();
     expect(m.cancelClose).toHaveBeenCalledTimes(1);
     expect(m.notifyApp).toHaveBeenLastCalledWith(
-      "Couldn't save highlights. Close the window again to close without saving.",
+      "Couldn't save highlights. Close the window again to close without saving them.",
     );
 
     // The close was cancelled: the window is open, mutations work again.
@@ -662,36 +665,132 @@ describe("F7: the close flush", () => {
     app.unmount();
   });
 
-  it("a mutation is refused while cancelClose is still pending, then accepted (save queued) once it settles", async () => {
+  it("a failed close, then a second close with no new edit, confirms (the warned discard)", async () => {
     const app = await mount();
     const a1 = makeHighlight("a1");
     const a2 = makeHighlight("a2");
     await loadFile(app.ctx, A, [a1]);
 
-    // A close whose flush fails is cancelled, but the cancel call itself is
-    // held open (a manually-resolvable promise) so the gate can be observed
-    // while it is still in flight.
     m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
-    let releaseCancel: (ok: boolean) => void = () => {};
-    m.cancelClose.mockImplementation(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          releaseCancel = (ok) => (ok ? resolve() : reject(new Error("cancel failed")));
-        }),
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves(); // the edit's save fails: it stays dirty
+
+    // Close 1: the flush fails; the store records a discard offer,
+    // cancels the close, and tells the user to close again.
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).not.toHaveBeenCalled();
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).toHaveBeenLastCalledWith(
+      "Couldn't save highlights. Close the window again to close without saving them.",
     );
+
+    // Close 2, with no new edit since the warning: the flush still
+    // fails, but the user was told about exactly these changes, so the
+    // close confirms (they are discarded) — no second cancel.
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).toHaveBeenCalledTimes(1);
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    app.unmount();
+  });
+
+  it("a new edit after a failed close re-opens the offer: the next close cancels again", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves(); // the edit's save fails: it stays dirty
+
+    // Close 1: the flush fails; the offer is recorded and the close is
+    // cancelled.
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).not.toHaveBeenCalled();
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+
+    // A new edit after the warning: its `gen` moves past the offer's
+    // snapshot, so the next close must not discard it.
+    act(() => app.ctx.updateHighlight(A, "a2", { note: "new note" }));
+    await drainSaves(); // its save keeps failing (silent: same streak)
+
+    // Close 2: the flush still fails; an edit was accepted since the
+    // last warning, so a fresh offer is recorded and the close is
+    // cancelled again.
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).not.toHaveBeenCalled();
+    expect(m.cancelClose).toHaveBeenCalledTimes(2);
+    expect(m.notifyApp).toHaveBeenCalledTimes(3);
+    expect(m.notifyApp).toHaveBeenNthCalledWith(
+      3,
+      "Couldn't save highlights. Close the window again to close without saving them.",
+    );
+    app.unmount();
+  });
+
+  it("a successful close flush clears the open discard offer (the close confirms)", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves(); // the edit's save fails: it stays dirty
+
+    // Close 1: the flush fails; the offer is recorded and the close is
+    // cancelled.
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).not.toHaveBeenCalled();
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+
+    // The save recovers. Close 2: the flush now succeeds, so the close
+    // confirms — and the successful flush settles the open offer
+    // (nothing is left to close without; no further "close again"
+    // warning is emitted).
+    m.saveHighlights.mockImplementation(() => Promise.resolve());
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).toHaveBeenCalledTimes(2);
+    expect(m.notifyApp).toHaveBeenNthCalledWith(
+      2,
+      "Couldn't save highlights. Close the window again to close without saving them.",
+    );
+    app.unmount();
+  });
+
+  it("a rejected cancel keeps the mutation gate up: edits stay refused until the window closes", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    // A close whose flush fails, whose cancel call *rejects* (the
+    // native guard may still be `Flushing` — its ceiling closes the
+    // window either way): the gate must stay up.
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    m.cancelClose.mockImplementation(() => Promise.reject(new Error("cancel failed")));
     act(() => app.ctx.addHighlight(A, a2));
     await drainSaves(); // the edit's save fails: it stays dirty
 
     // Trigger the close: the flush fails, so the handler reaches
-    // `await tauri.cancelClose()` and stays there while the gate is up.
+    // `await tauri.cancelClose()`, which rejects.
     m.flushListeners[0]();
     await drainSaves();
     expect(m.cancelClose).toHaveBeenCalledTimes(1);
     expect(m.confirmClose).not.toHaveBeenCalled();
 
-    // While the cancel is pending the gate is still up: a mutation is
-    // refused like an unloaded path — the in-memory state is unchanged and
-    // no save is queued for it.
+    // The cancel rejected: the gate stays up. The mutation is refused
+    // like an unloaded path — the in-memory state is unchanged and no
+    // save is queued — and the user is told the highlights are
+    // read-only until the window closes (not "close again to close
+    // without saving": the cancel did not land).
     const callsBefore = m.saveHighlights.mock.calls.length;
     act(() => app.ctx.updateHighlight(A, "a2", { colour: "pink" }));
     expect(app.ctx.byFile[A]).toEqual(
@@ -699,20 +798,9 @@ describe("F7: the close flush", () => {
     );
     await drainSaves();
     expect(m.saveHighlights.mock.calls.length).toBe(callsBefore);
-
-    // Once the cancel settles the gate clears: the same mutation is now
-    // accepted (the state updates) and its save is queued.
-    releaseCancel(true);
-    await drainSaves();
-    m.saveHighlights.mockImplementation(() => Promise.resolve());
-    act(() => app.ctx.updateHighlight(A, "a2", { colour: "pink" }));
-    expect(app.ctx.byFile[A]).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "a2", colour: "pink" })]),
-    );
-    await drainSaves();
-    expect(m.saveHighlights).toHaveBeenLastCalledWith(
-      A,
-      expect.arrayContaining([expect.objectContaining({ id: "a2", colour: "pink" })]),
+    expect(m.notifyApp).toHaveBeenCalledTimes(2);
+    expect(m.notifyApp).toHaveBeenLastCalledWith(
+      "Highlights are read-only until the window closes.",
     );
     app.unmount();
   });

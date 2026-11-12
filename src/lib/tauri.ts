@@ -100,8 +100,9 @@ export const tauri = {
   /**
    * Cancel a window close after a failed highlights flush: stops the
    * 30-second ceiling without closing the window. The backend's close
-   * guard moves to `DiscardAllowed`, so a later close request closes for
-   * real ("close without saving").
+   * guard returns to `Idle` for the same cycle, so a later close request
+   * is a fresh cycle that requests a flush again (the frontend decides
+   * whether it confirms or cancels).
    */
   cancelClose: () => invoke<void>("cancel_close"),
 };

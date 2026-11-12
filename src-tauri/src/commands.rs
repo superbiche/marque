@@ -295,22 +295,12 @@ pub async fn get_highlights(path: String) -> AppResult<GetHighlightsResult> {
 /// (line range + normalized-text window + one-way hash) plus the user's
 /// own note — never the selected text. The save (temp write + `sync_all`
 /// + rename + directory `fsync`) runs on the blocking pool, not the main
-/// thread (see `run_blocking`). Before that, it re-arms the close guard:
-/// an edit that was just accepted means the guard's `DiscardAllowed`
-/// ("the next close passes through without saving") must not outlive it,
-/// so the guard moves back to `Idle` (a no-op in every other phase) and a
-/// later close requests a flush instead of discarding these edits.
+/// thread (see `run_blocking`). The close guard is not touched here:
+/// whether a close may discard unsaved edits is the frontend's
+/// decision (it is the source of truth for accepted edits, which this
+/// command only sees once the save reaches Rust).
 #[tauri::command]
-pub async fn save_highlights(app: AppHandle, path: String, highlights: Vec<Highlight>) -> AppResult<()> {
-    // Re-arm the close guard (a new edit was accepted): `DiscardAllowed`
-    // → `Idle`, a no-op in every other phase. Done synchronously before
-    // the blocking body — every accepted edit queues a save immediately,
-    // so no frontend round-trip is needed (and the re-arm cannot race the
-    // close cycle the way a fire-and-forget invoke could).
-    if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
-        let mut state = guard.state.lock();
-        *state = crate::handle_save_started(*state);
-    }
+pub async fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()> {
     run_blocking("save_highlights", move || {
         if !std::path::Path::new(&path).is_absolute() {
             return Err(AppError::Invalid(format!(
@@ -399,9 +389,9 @@ pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
             if destroy {
                 // A failed destroy must not leave the window trapped in
                 // `Closing` (no timer acts from that phase): log the
-                // failure without values and let the next close request
-                // pass through (`on_destroy_result` moves the phase to
-                // `DiscardAllowed`).
+                // failure without values and return the guard to `Idle`
+                // (`on_destroy_result`), so the next close request is a
+                // fresh cycle.
                 if window.destroy().is_err() {
                     eprintln!("marque: could not destroy the main window (30 s ceiling)");
                     let mut state = guard.state.lock();
@@ -419,9 +409,9 @@ pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
 /// protocol-violating `FlushRequested` where the ack was skipped) — a
 /// confirm after a failed (cancelled) flush, or a stray confirm from
 /// anywhere else, does not close the window. If the destroy call itself
-/// fails, the guard moves to `DiscardAllowed`, so the next close
-/// request passes through — a failed destroy must not leave the window
-/// uncloseable. It must only be called by our own webview.
+/// fails, the guard returns to `Idle`, so the next close request is a
+/// fresh cycle — a failed destroy must not leave the window uncloseable.
+/// It must only be called by our own webview.
 #[tauri::command]
 pub fn confirm_close(app: AppHandle) -> AppResult<()> {
     let guard = match app.try_state::<Arc<crate::CloseGuard>>() {
@@ -440,8 +430,9 @@ pub fn confirm_close(app: AppHandle) -> AppResult<()> {
         };
         // A failed destroy must not leave the window trapped in
         // `Closing` (no timer acts from that phase): log the failure
-        // without values and let the next close request pass through
-        // (`on_destroy_result` moves the phase to `DiscardAllowed`).
+        // without values and return the guard to `Idle`
+        // (`on_destroy_result`), so the next close request is a fresh
+        // cycle.
         if window.destroy().is_err() {
             eprintln!("marque: could not destroy the main window (confirm close)");
             let mut state = guard.state.lock();
@@ -452,9 +443,12 @@ pub fn confirm_close(app: AppHandle) -> AppResult<()> {
 }
 
 /// Cancel a close request after a failed highlights flush: the window
-/// stays open, and the guard moves to `DiscardAllowed`, so the *next*
-/// close request closes for real ("close without saving"). A stale cancel
-/// outside an in-flight flush cycle is a no-op.
+/// stays open, and the guard returns to `Idle` for the same cycle, so
+/// the *next* close request is a fresh cycle that requests a flush
+/// again. Whether that close discards the unsaved edits is the
+/// frontend's call (it knows every accepted edit; this guard only
+/// sequences the close itself). A stale cancel outside an in-flight
+/// flush cycle is a no-op.
 #[tauri::command]
 pub fn cancel_close(app: AppHandle) -> AppResult<()> {
     if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {

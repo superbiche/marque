@@ -136,9 +136,21 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // True from the instant a close-flush request arrives until the close is
   // cancelled. Mutations are refused while it is set: a save queued between
   // a successful flush and `confirmClose` — or mid-flush, racing the
-  // re-check loop — would never be persisted. It is cleared only on a
-  // cancelled close, when the window stays open and editing resumes.
+  // re-check loop — would never be persisted. It is cleared when a
+  // cancelled close settles; a cancel that *fails* keeps it set — the
+  // native guard may still be `Flushing` (its ceiling closes the window),
+  // so edits stay refused until the window closes.
   const closingRef = React.useRef(false);
+  // The open "close without saving" offer: the per-path `gen` values at
+  // the moment of the last *failed* close-flush. The frontend is the
+  // source of truth for accepted edits (Rust only sees a save once it
+  // lands), so it alone can decide whether a later close may discard: a
+  // second close flushes; if it fails and no path's `gen` has moved since
+  // the snapshot (no edit accepted after the warning) the close confirms
+  // — the user was warned about exactly these changes. A moved `gen`
+  // records a fresh offer and the close is cancelled again. Cleared on
+  // every successful close-flush (nothing is left to close without).
+  const discardOfferRef = React.useRef<Map<string, number> | null>(null);
 
   React.useEffect(() => {
     localStorage.setItem(ACTIVE_COLOUR_KEY, activeColour);
@@ -440,13 +452,42 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     };
   }, []);
 
-  // Intercept the main window's first close request. Rust emits this right
-  // after `api.prevent_close()`. We acknowledge it immediately (so Rust drops
-  // its 2-second "frontend dead" fallback and starts a 30-second ceiling),
-  // then flush: on success we confirm the close (Rust destroys the window);
-  // on failure we cancel it (the window stays open; Rust's close guard
-  // moves to `DiscardAllowed`, so closing again closes for real) and tell
-  // the user to close again.
+  // Snapshot every path's current `gen` (null if no path has ever been
+  // edited).
+  const generationsSnapshot = (): Map<string, number> | null => {
+    if (writersRef.current.size === 0) return null;
+    const snap = new Map<string, number>();
+    for (const [path, w] of writersRef.current) snap.set(path, w.gen);
+    return snap;
+  };
+
+  // True if an accepted edit moved a `gen` past the snapshot: a path
+  // absent at the snapshot's time (edited since), or a path whose
+  // generation is newer.
+  const editsSince = (snap: Map<string, number>): boolean => {
+    for (const [path, w] of writersRef.current) {
+      const before = snap.get(path);
+      if (before === undefined || w.gen > before) return true;
+    }
+    return false;
+  };
+
+  // Intercept the main window's close requests. Rust emits this right
+  // after `api.prevent_close()`. We acknowledge it immediately (so Rust
+  // drops its 2-second "frontend dead" fallback and starts a 30-second
+  // ceiling), then flush: on success we confirm the close (Rust destroys
+  // the window) and clear any open discard offer. On failure we cancel
+  // the close and record a *discard offer* (the per-path `gen` values at
+  // the moment of the failed flush), telling the user to close the
+  // window again to close without saving them. The user's next close
+  // flushes again: a success confirms; a failure confirms only when no
+  // accepted edit moved a `gen` since the offer (the user was warned
+  // about exactly these changes — Rust alone could not tell, since a
+  // save it has not seen is one that has not landed) — any newer edit
+  // records a fresh offer and the close is cancelled again. A cancel
+  // that itself fails keeps the mutation gate up (the native guard may
+  // still be `Flushing`; its ceiling closes the window), so edits stay
+  // refused until the window closes.
   React.useEffect(() => {
     if (!inTauri()) return;
     let unlisten: UnlistenFn | null = null;
@@ -456,8 +497,8 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
       // From the instant the request arrives, gate the mutations: a
       // mutation between a successful flush and `confirmClose` — or while
       // the flush is running — would queue a save the window is about to
-      // destroy and never persist. The gate is cleared only when the close
-      // is cancelled (the window stays open).
+      // destroy and never persist. The gate is cleared when a cancelled
+      // close settles (a failed *cancel* keeps it up — see below).
       closingRef.current = true;
       void (async () => {
         try {
@@ -467,31 +508,54 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
         }
         const { ok } = (await flushRef.current?.()) ?? { ok: false };
         if (ok) {
+          // Every accepted edit is persisted: settle any open discard
+          // offer (there is nothing left to close without) and confirm
+          // the close.
+          discardOfferRef.current = null;
           try {
             await tauri.confirmClose();
           } catch {
             // the 30-second ceiling destroys the window either way
           }
         } else {
-          // The flush failed: ask the native guard to cancel the close
-          // first (it moves to `DiscardAllowed`, "the next close passes
-          // through without saving"), and only then re-open edits.
-          // Awaiting the cancel — even to its rejection — keeps the
-          // frontend gate in lockstep with the native guard, so a
-          // mutation never lands while the guard is still mid-cancel.
-          // Re-arming is now native: the next accepted edit's save moves
-          // the guard back to `Idle`, so a later close flushes those
-          // edits instead of discarding them.
-          try {
-            await tauri.cancelClose();
-          } catch (err) {
-            // The cancel call itself failed (the 30-second ceiling
-            // destroys the window either way): still re-open edits below
-            // so the app never gets stuck refusing them.
-            console.error("failed to cancel the close after a failed flush", err);
+          // The flush failed. A discard offer is open (the user was
+          // warned) and no accepted edit moved a `gen` since the
+          // snapshot? Confirm the close: the user was told about exactly
+          // these unsaved changes. Otherwise record a fresh offer and
+          // cancel the close.
+          const offer = discardOfferRef.current;
+          if (offer !== null && !editsSince(offer)) {
+            discardOfferRef.current = null;
+            try {
+              await tauri.confirmClose();
+            } catch {
+              // the 30-second ceiling destroys the window either way
+            }
+          } else {
+            discardOfferRef.current = generationsSnapshot();
+            // Ask the native guard to cancel the close first (it
+            // returns to `Idle` for the same cycle, so the next close
+            // request is a fresh cycle that requests a flush again), and
+            // only then re-open edits: awaiting the cancel keeps the
+            // frontend gate in lockstep with the native guard, so a
+            // mutation never lands while the guard is still mid-cancel.
+            try {
+              await tauri.cancelClose();
+              closingRef.current = false;
+              notifyApp(
+                "Couldn't save highlights. Close the window again to close without saving them.",
+              );
+            } catch (err) {
+              // The cancel call itself failed (the native guard may
+              // still be `Flushing` and its 30-second ceiling destroys
+              // the window either way): keep the gate up — clearing it
+              // would accept mutations into a window that is about to
+              // be destroyed — and tell the user the highlights are
+              // read-only until the window closes.
+              console.error("failed to cancel the close after a failed flush", err);
+              notifyApp("Highlights are read-only until the window closes.");
+            }
           }
-          closingRef.current = false;
-          notifyApp("Couldn't save highlights. Close the window again to close without saving.");
         }
       })();
     })
