@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Changed
+- Command palette: the Actions list (theme, zoom, split panes, highlights panel, open file, add folder) is now searchable while you type. A query lists up to five matching actions in an Actions group above the file results and Enter runs the selected one; with an empty query the full list shows in the same order as before. Matching is case-insensitive, ranking prefix and word-start matches before substrings, with subsequence matches as the lowest tier, so "highl" finds "Toggle Highlights Panel" and "dark" finds "Theme: Dark".
+- Command palette: file results now show exactly what the Rust (nucleo) index returns, in nucleo's order. cmdk's built-in filter was left on, which re-ranked the pre-ranked results in JavaScript and could hide matches the Rust index had found.
+
 ## [0.4.11] - 2026-11-12
 
 ### Added
