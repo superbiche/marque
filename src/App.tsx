@@ -410,12 +410,17 @@ function AppShell() {
   }, [handleAppAction]);
 
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     (async () => {
       const off = await onMenuAction((id) => appActionRef.current(id));
-      unlisten = off;
+      if (cancelled) off();
+      else unlisten = off;
     })();
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   // Global keyboard shortcuts.
@@ -443,12 +448,10 @@ function AppShell() {
       } else if (meta && k === "p") {
         e.preventDefault();
         handleAppAction("print");
-      } else if (meta && e.key === "\\") {
-        // The backslash key reports "|" when Shift is held, so this branch is
-        // unshifted-only: the ⌘⇧\ (horizontal) twin of the old code never
-        // matched, so Split Right is all it could ever dispatch.
+      } else if (meta && (e.key === "\\" || e.key === "|")) {
+        // Shift+\ reports "|" on US layouts.
         e.preventDefault();
-        handleAppAction("split_right");
+        handleAppAction(e.shiftKey ? "split_down" : "split_right");
       } else if (meta && k === "w") {
         e.preventDefault();
         handleAppAction("close_tab");

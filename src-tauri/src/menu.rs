@@ -14,7 +14,7 @@
 //! …) run their native selector and never emit an event, so they never reach
 //! [`handle_event`].
 
-use tauri::menu::{Menu, MenuEvent, MenuItem, SubmenuBuilder};
+use tauri::menu::{Menu, MenuEvent, MenuItem, SubmenuBuilder, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_opener::OpenerExt;
 
@@ -93,7 +93,7 @@ pub(crate) fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     // item with no accelerator — the predefined Close Window would claim ⌘W,
     // which the app reserves for Close Tab.
     let close_window = MenuItem::with_id(app, "close_window", "Close", true, None::<&str>)?;
-    let window = SubmenuBuilder::new(app, "Window")
+    let window = SubmenuBuilder::with_id(app, WINDOW_SUBMENU_ID, "Window")
         .minimize()
         .maximize()
         .separator()
@@ -102,7 +102,7 @@ pub(crate) fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
 
     // Help
     let help_github = MenuItem::with_id(app, "help_github", "Marque on GitHub", true, None::<&str>)?;
-    let help = SubmenuBuilder::new(app, "Help")
+    let help = SubmenuBuilder::with_id(app, HELP_SUBMENU_ID, "Help")
         .item(&help_github)
         .build()?;
 
