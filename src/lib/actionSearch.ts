@@ -9,7 +9,8 @@
  * Matching is case-insensitive and layered in four tiers, best first:
  *
  *   0  prefix     — the query starts the label, or starts a keyword
- *   1  word start — the query starts a word of the label or a keyword
+ *   1  word start — the label or keyword, from any word boundary onward,
+ *                   starts with the query (a multi-word query may span words)
  *   2  substring  — the query is a contiguous run inside the label or a keyword
  *   3  subsequence— the query's characters appear in order (fuzzy, lowest tier)
  *
@@ -51,6 +52,25 @@ function isSubsequence(needle: string, hay: string): boolean {
 }
 
 /**
+ * Whether `s` begins with `q` at a word boundary — i.e. `s`, from the start of
+ * some word onward, starts with `q`. This is the word-start tier for a
+ * multi-word query that begins at a word boundary: "pane v" begins "split
+ * pane vertically" at the "pane" word, so it is a word start even though the
+ * query spans two words. `q` is non-empty and `s` has single-space-separated
+ * words (from `normalize`).
+ */
+function startsAtWordBoundary(s: string, q: string): boolean {
+  let start = 0;
+  while (start <= s.length) {
+    if (s.startsWith(q, start)) return true;
+    const space = s.indexOf(" ", start);
+    if (space === -1) return false;
+    start = space + 1;
+  }
+  return false;
+}
+
+/**
  * Best tier at which `q` (already normalized) matches the normalized string
  * `s`, or `null` when it does not match at all. The tiers nest — a prefix
  * is a word start, a word start a substring, a substring a subsequence — so
@@ -58,7 +78,7 @@ function isSubsequence(needle: string, hay: string): boolean {
  */
 function matchTier(q: string, s: string): ActionTier | null {
   if (s.startsWith(q)) return 0;
-  if (s.split(" ").some((w) => w.startsWith(q))) return 1;
+  if (startsAtWordBoundary(s, q)) return 1;
   if (s.includes(q)) return 2;
   if (isSubsequence(q, s)) return 3;
   return null;

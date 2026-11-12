@@ -65,6 +65,18 @@ describe("rankActions", () => {
     ]);
   });
 
+  it("a multi-word query starting at a word boundary ranks above an earlier substring match", () => {
+    const actions: ActionDef[] = [
+      { id: "expane", label: "Expane Vertical" },
+      { id: "split-vertical", label: "Split Pane Vertically" },
+    ];
+    // "pane v" begins "Split Pane Vertically" at the "pane" word boundary, so it is a
+    // word-start match (tier 1). "Expane Vertical" only contains "pane v" as a run
+    // inside "expane" (tier 2) and is defined first — before the fix both were tier 2
+    // and the earlier "expane" wrongly outranked "split-vertical".
+    expect(ids(rankActions("pane v", actions))).toEqual(["split-vertical", "expane"]);
+  });
+
   it("is case-insensitive", () => {
     for (const q of ["highl", "HIGHL", "HiGhL"]) {
       expect(ids(rankActions(q, ACTUAL))).toEqual(["toggle-highlights"]);
