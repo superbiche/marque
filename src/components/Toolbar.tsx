@@ -15,7 +15,9 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
-import { Search, Sun, Moon, Monitor, FileText, Printer, FolderOpen, Copy, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus, ZoomIn, ZoomOut } from "lucide-react";
+import { Search, Sun, Moon, Monitor, FileText, Printer, FolderOpen, Copy, SplitSquareHorizontal, SplitSquareVertical, X, Settings, Minus, Plus, ZoomIn, ZoomOut, Highlighter } from "lucide-react";
+import { cn } from "@/lib/utils";
+import type { HighlightColour } from "@/lib/highlights";
 import { useTheme, type Theme } from "@/lib/theme";
 import {
   CONTENT_ZOOM_MAX,
@@ -36,12 +38,15 @@ interface Props {
   onCloseSplit: () => void;
   isSplit: boolean;
   onFind: () => void;
+  onToggleHighlights?: () => void;
+  highlightsOpen?: boolean;
+  activeHighlightColour?: HighlightColour;
   onPrint: () => void;
   onRevealFile: () => void;
   onCopyContent: () => void;
 }
 
-export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind, onPrint, onRevealFile, onCopyContent }: Props) {
+export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, onCloseSplit, isSplit, onFind, onToggleHighlights, highlightsOpen, activeHighlightColour, onPrint, onRevealFile, onCopyContent }: Props) {
   const { theme, setTheme } = useTheme();
   const {
     copyAsMarkdown,
@@ -90,6 +95,30 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
           </TooltipTrigger>
           <TooltipContent>Find in document (⌘F)</TooltipContent>
         </Tooltip>
+        {onToggleHighlights && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                onClick={onToggleHighlights}
+                variant="ghost"
+                size="icon"
+                className={cn("relative h-7 w-7", highlightsOpen && "bg-accent")}
+              >
+                <Highlighter className="h-3.5 w-3.5" />
+                {activeHighlightColour && (
+                  <span
+                    aria-hidden
+                    className="marque-highlight-swatch absolute -bottom-0.5 right-1 h-1.5 w-1.5 rounded-sm border border-border/60"
+                    data-highlight-colour={activeHighlightColour}
+                  />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {highlightsOpen ? "Hide highlights" : "Show highlights"}
+            </TooltipContent>
+          </Tooltip>
+        )}
         <Separator orientation="vertical" className="mx-0.5 h-4" />
         <Tooltip>
           <TooltipTrigger asChild>

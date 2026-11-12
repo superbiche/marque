@@ -65,28 +65,6 @@ export interface HighlightsFile {
   files: Record<string, Highlight[]>;
 }
 
-/**
- * Upstream marky v1 shape. Only ever read (from the `get_highlights`
- * payload) so it can be migrated to v2; never written by us.
- */
-export interface LegacyHighlight {
-  id: string;
-  filePath: string;
-  colour: string;
-  sourceStartLine: number;
-  sourceEndLine: number;
-  passage: string;
-  occurrence: number;
-  section: string;
-  createdAt: string;
-  note?: string;
-}
-
-export interface LegacyHighlightsFile {
-  version: 1;
-  files: Record<string, LegacyHighlight[]>;
-}
-
 export function emptyFile(): HighlightsFile {
   return { version: 2, files: {} };
 }
@@ -499,48 +477,6 @@ export function sectionHeadingForRange(
   }
   void endLine;
   return best;
-}
-
-// ---------------------------------------------------------------------------
-// Legacy v1 (upstream marky) migration
-// ---------------------------------------------------------------------------
-
-/**
- * Migrate one upstream v1 highlight to v2: the passage is normalized and
- * hashed (one-way) and then discarded; the anchor becomes a window of the
- * normalized passage's length in its original block, which
- * `resolveAnchors` can re-locate by hash scan.
- */
-export function migrateLegacyHighlight(legacy: LegacyHighlight): Highlight {
-  const passage = normalizeText(legacy.passage);
-  const colour = (HIGHLIGHT_COLOURS as readonly string[]).includes(legacy.colour)
-    ? (legacy.colour as HighlightColour)
-    : DEFAULT_COLOUR;
-  const note = legacy.note && legacy.note.trim() ? legacy.note : undefined;
-  return {
-    id: legacy.id,
-    colour,
-    anchor: {
-      startLine: legacy.sourceStartLine,
-      endLine: legacy.sourceEndLine,
-      startOffset: 0,
-      length: passage.length,
-      hash: fnv1a64(passage),
-    },
-    note,
-    createdAt: legacy.createdAt,
-    updatedAt: legacy.createdAt,
-  };
-}
-
-/** Migrate a whole v1 file to the v2 shape (ready to save per path). */
-export function migrateLegacyFile(file: LegacyHighlightsFile): HighlightsFile {
-  const files: Record<string, Highlight[]> = {};
-  for (const [path, items] of Object.entries(file.files ?? {})) {
-    const migrated = items.map(migrateLegacyHighlight);
-    if (migrated.length > 0) files[path] = migrated;
-  }
-  return { version: 2, files };
 }
 
 // ---------------------------------------------------------------------------

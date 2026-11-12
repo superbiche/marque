@@ -1,7 +1,7 @@
 use crate::cli::InitialTarget;
 use crate::error::{AppError, AppResult};
 use crate::folder::TreeNode;
-use crate::highlights::{Highlight, LegacyHighlightsFile, HighlightsFile};
+use crate::highlights::{Highlight, HighlightsFile};
 use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
 use crate::settings::{settings_dir, Folder, SettingsLoadStatus};
@@ -244,16 +244,12 @@ pub fn get_settings_load_status(
 pub const MAX_HIGHLIGHTS_PER_FILE: usize = 2000;
 pub const MAX_NOTE_CHARS: usize = 4_000;
 
-/// The highlights for one document, plus a parsed legacy v1 file when the
-/// on-disk store predates the v2 reference-only model. The frontend migrates
-/// v1 content (computing the one-way passage hash) and saves it back as v2.
+/// The v2 highlights for one document path (empty when none).
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetHighlightsResult {
     pub version: u32,
     pub highlights: Vec<Highlight>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub legacy: Option<LegacyHighlightsFile>,
 }
 
 #[tauri::command]
@@ -263,12 +259,11 @@ pub fn get_highlights(path: String) -> AppResult<GetHighlightsResult> {
             "path must be absolute, got: {path}"
         )));
     }
-    let loaded = HighlightsFile::load(&settings_dir())?;
-    let highlights = loaded.file.get(&path).to_vec();
+    let file = HighlightsFile::load(&settings_dir())?;
+    let highlights = file.get(&path).to_vec();
     Ok(GetHighlightsResult {
-        version: loaded.file.version,
+        version: file.version,
         highlights,
-        legacy: loaded.legacy,
     })
 }
 
@@ -298,10 +293,10 @@ pub fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()
             }
         }
     }
-    let dir = settings_dir();
-    let mut file = HighlightsFile::load(&dir)?.file;
-    file.set(path, highlights);
-    file.save(&dir)
+    // The read-modify-write is serialized process-wide (see
+    // `HighlightsFile::update_path`) so rapid edits from two panes cannot
+    // lose each other's update.
+    HighlightsFile::update_path(&settings_dir(), path, highlights)
 }
 
 /// All document paths that currently have at least one highlight, sorted
@@ -309,7 +304,6 @@ pub fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()
 #[tauri::command]
 pub fn list_highlighted_paths() -> AppResult<Vec<String>> {
     let mut paths = HighlightsFile::load(&settings_dir())?
-        .file
         .files
         .keys()
         .cloned()

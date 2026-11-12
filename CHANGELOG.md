@@ -8,6 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
+## [Unreleased]
+
+### Added
+- Highlights: select any text in a document to mark it in one of five colourblind-safe colours, attach a note, and review everything in a panel (toolbar or "Toggle Highlights Panel" command) with colour filters, per-item, per-colour and all-in-one copy of agent-ready blocks, and a 5-second undo for deletions. Highlights are stored per document in `~/.config/marque/highlights.json` as line anchors plus notes — the document's own text is never stored. (Ported from GRVYDEV/marky#9 by @JohnnyBonk, with storage reduced to references and notes.)
+
 ## [0.4.10] - 2026-11-12
 
 ### Added

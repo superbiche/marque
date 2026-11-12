@@ -11,8 +11,6 @@ import {
   formatExportItem,
   formatExportList,
   isInCodeBlock,
-  migrateLegacyFile,
-  migrateLegacyHighlight,
   newHighlightId,
   normalizeText,
   resolveAnchors,
@@ -405,56 +403,6 @@ describe("collectBlocks / sectionHeadingForRange", () => {
     expect(sectionHeadingForRange(root, 1, 2)).toBe("Setup");
     expect(sectionHeadingForRange(root, 3, 4)).toBe("Details");
     expect(sectionHeadingForRange(root, 0, 1)).toBe("");
-  });
-});
-
-describe("legacy v1 migration", () => {
-  const legacy = {
-    id: "v1-1",
-    filePath: "/abs/README.md",
-    colour: "pink",
-    sourceStartLine: 3,
-    sourceEndLine: 5,
-    passage: "Run  `npm install`  then go.",
-    occurrence: 0,
-    section: "Installation",
-    createdAt: "2026-04-29T15:30:00.000Z",
-    note: "do it twice",
-  };
-
-  it("hashes the normalized passage and discards the text", () => {
-    const h = migrateLegacyHighlight(legacy);
-    expect(h.id).toBe("v1-1");
-    expect(h.colour).toBe("pink");
-    expect(h.note).toBe("do it twice");
-    expect(h.anchor.startLine).toBe(3);
-    expect(h.anchor.endLine).toBe(5);
-    expect(h.anchor.startOffset).toBe(0);
-    expect(h.anchor.length).toBe(normalizeText(legacy.passage).length);
-    expect(h.anchor.hash).toBe(fnv1a64(normalizeText(legacy.passage)));
-    // No trace of the passage in the migrated item.
-    const json = JSON.stringify(h);
-    expect(json).not.toContain("npm install");
-    expect(json).not.toContain("passage");
-  });
-
-  it("falls back to the default colour for unknown values and drops blank notes", () => {
-    const h = migrateLegacyHighlight({ ...legacy, colour: "chartreuse", note: "   " });
-    expect(h.colour).toBe(DEFAULT_COLOUR);
-    expect(h.note).toBeUndefined();
-  });
-
-  it("migrates a whole file to version 2, keyed by path", () => {
-    const file = migrateLegacyFile({
-      version: 1,
-      files: {
-        [legacy.filePath]: [legacy],
-        "/empty.md": [],
-      },
-    });
-    expect(file.version).toBe(2);
-    expect(Object.keys(file.files)).toEqual([legacy.filePath]);
-    expect(file.files[legacy.filePath][0].id).toBe("v1-1");
   });
 });
 

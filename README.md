@@ -53,6 +53,7 @@ Viewing
 - **Document links** — relative and absolute links to other markdown files open in a tab (with `#heading` scroll), in-page anchors scroll, external URLs open in the system browser.
 - **On this page** — a table of contents of the open document; sidebars are resizable.
 - **Find in document** — ⌘F searches inside the open document.
+- **Highlights** — mark any passage in one of five colours, attach a note, and review everything in a panel (⌘K → "Toggle Highlights Panel") with colour filters and agent-ready copy; stored per document in `~/.config/marque/highlights.json`.
 - **Content zoom, width and fonts** — zoom the rendered content independently of the UI (70–200 %), choose Narrow / Wide / Full width, and pick the reading font (Geist, Inter, iA Writer Quattro, Literata, or System).
 - **Print** — ⌘P prints the open document with a paper-friendly stylesheet.
 - **Copy** — copy the document's markdown source, or copy exactly what you selected.

@@ -96,17 +96,16 @@ impl HighlightsFile {
     }
 
     /// Load the v2 store. A missing file yields the default; a file that
-    /// does not parse (or fails to deserialize) is preserved as
+    /// does not parse as v2 is preserved as
     /// `highlights.json.corrupt-<timestamp>` and never overwritten
-    /// silently. A legacy v1 file (upstream marky shape, which stores
-    /// passage text) is parsed and returned so the frontend can migrate it
-    /// (hashing the passages and discarding the text); it is left untouched
-    /// until the first save, which replaces it — no v1 text survives on disk
-    /// after that save (per the reference-only rule).
-    pub fn load(dir: &Path) -> AppResult<LoadedHighlights> {
+    /// silently. Any other shape (including a stray upstream marky v1
+    /// file — marky wrote under its own app data directory, so a v1 file
+    /// cannot legitimately appear at this path) goes through the same
+    /// corrupt-file path.
+    pub fn load(dir: &Path) -> AppResult<HighlightsFile> {
         let p = dir.join(FILE_NAME);
         if !p.exists() {
-            return Ok(LoadedHighlights::default());
+            return Ok(Self::default());
         }
         let raw = std::fs::read_to_string(&p)?;
         let value: serde_json::Value = match serde_json::from_str(&raw) {
@@ -118,125 +117,56 @@ impl HighlightsFile {
                     p.display(),
                     backup.display()
                 );
-                return Ok(LoadedHighlights::default());
+                return Ok(Self::default());
             }
         };
-        if value.get("version").and_then(|v| v.as_u64()) == Some(1) {
-            match serde_json::from_value::<LegacyHighlightsFile>(value) {
-                Ok(legacy) => {
-                    eprintln!(
-                        "marque: highlights file {} is legacy v1 (stores passage text); its \
-                         entries are migrated by the frontend and the file is rewritten as \
-                         v2 on the next save",
-                        p.display()
-                    );
-                    Ok(LoadedHighlights {
-                        file: Self::default(),
-                        legacy: Some(legacy),
-                    })
-                }
-                Err(error) => {
-                    let backup = preserve_corrupt(&p)?;
-                    eprintln!(
-                        "marque: highlights file {} could not be read as legacy v1 and was \
-                         preserved at {}: {error}",
-                        p.display(),
-                        backup.display()
-                    );
-                    Ok(LoadedHighlights::default())
-                }
-            }
-        } else {
-            match serde_json::from_value::<HighlightsFile>(value) {
-                Ok(file) => Ok(LoadedHighlights {
-                    file,
-                    legacy: None,
-                }),
-                Err(error) => {
-                    let backup = preserve_corrupt(&p)?;
-                    eprintln!(
-                        "marque: highlights file {} failed to deserialize and was preserved \
-                         at {}: {error}",
-                        p.display(),
-                        backup.display()
-                    );
-                    Ok(LoadedHighlights::default())
-                }
+        match serde_json::from_value::<HighlightsFile>(value) {
+            Ok(file) => Ok(file),
+            Err(error) => {
+                let backup = preserve_corrupt(&p)?;
+                eprintln!(
+                    "marque: highlights file {} is not a valid v2 store and was preserved \
+                     at {}: {error}",
+                    p.display(),
+                    backup.display()
+                );
+                Ok(Self::default())
             }
         }
     }
 
     /// Atomic write: serialize to a temp file in the same directory, then
-    /// rename over the target. A legacy v1 file still on disk (upstream
-    /// marky's shape, which stores passage text) is simply replaced: the
-    /// v2 file carries references only, so no v1 passage text survives on
-    /// disk after this save (the reference-only rule). The user's original
-    /// marky data, if any, is untouched in marky's own data directory.
+    /// rename over the target.
     pub fn save(&self, dir: &Path) -> AppResult<()> {
         std::fs::create_dir_all(dir)?;
         let _guard = SAVE_LOCK.lock();
         let p = dir.join(FILE_NAME);
-        if let Ok(raw) = std::fs::read_to_string(&p) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
-                if v.get("version").and_then(|v| v.as_u64()) == Some(1) {
-                    eprintln!(
-                        "marque: replaced legacy v1 highlights file {} with v2 (references \
-                         only; no v1 passage text is retained on disk)",
-                        p.display()
-                    );
-                }
-            }
-        }
         let tmp = dir.join(format!("{FILE_NAME}.tmp.{}", std::process::id()));
         let raw = serde_json::to_string_pretty(self)?;
         std::fs::write(&tmp, raw)?;
         std::fs::rename(&tmp, &p)?;
         Ok(())
     }
-}
 
-/// Result of [`HighlightsFile::load`].
-#[derive(Debug, Clone, Default)]
-pub struct LoadedHighlights {
-    pub file: HighlightsFile,
-    /// Parsed v1 content when the on-disk file predates the v2 model.
-    pub legacy: Option<LegacyHighlightsFile>,
-}
-
-/// Upstream marky v1 shape. The camelCase derive reproduces the exact
-/// upstream field names (`filePath`, `sourceStartLine`, …). Deserialized to
-/// hand the content to the frontend for migration (the passage hash needs
-/// the JS-side NFC normalization, unavailable in Rust without a new
-/// dependency) and re-serialized unchanged in the `get_highlights` payload
-/// so the frontend can migrate it and save it back as v2.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyHighlight {
-    pub id: String,
-    pub file_path: String,
-    pub colour: String,
-    pub source_start_line: u32,
-    pub source_end_line: u32,
-    pub passage: String,
-    #[serde(default)]
-    pub occurrence: u32,
-    #[serde(default)]
-    pub section: String,
-    pub created_at: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LegacyHighlightsFile {
-    pub version: u32,
-    pub files: HashMap<String, Vec<LegacyHighlight>>,
+    /// Read-modify-write for one document path, serialized across the
+    /// process: two concurrent callers (rapid edits, two panes) each do
+    /// load → set → save, and without the lock the second save would
+    /// clobber the first's update.
+    pub fn update_path(dir: &Path, path: String, highlights: Vec<Highlight>) -> AppResult<()> {
+        let _guard = RMW_LOCK.lock();
+        let mut file = Self::load(dir)?;
+        file.set(path, highlights);
+        file.save(dir)
+    }
 }
 
 /// `load`/`save` can be called from concurrent command tasks; the
-/// rename-based write is atomic on its own, but the replace-legacy check
-/// must not race with itself, so all writes are serialized.
+/// rename-based write is atomic on its own, but the read-modify-write must
+/// be serialized so concurrent saves to different paths cannot lose each
+/// other. `RMW_LOCK` is held for the whole load → set → save; `SAVE_LOCK`
+/// serializes bare `save` calls taken on their own.
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
+static RMW_LOCK: Mutex<()> = Mutex::new(());
 
 fn preserve_corrupt(path: &Path) -> AppResult<PathBuf> {
     preserve_with_suffix(path, "corrupt")
@@ -290,9 +220,8 @@ mod tests {
         let f = HighlightsFile::default();
         f.save(dir.path()).unwrap();
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        assert_eq!(loaded.file.version, CURRENT_VERSION);
-        assert!(loaded.file.files.is_empty());
-        assert!(loaded.legacy.is_none());
+        assert_eq!(loaded.version, CURRENT_VERSION);
+        assert!(loaded.files.is_empty());
     }
 
     #[test]
@@ -309,7 +238,7 @@ mod tests {
         f.save(dir.path()).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        let items = loaded.file.get("/a.md");
+        let items = loaded.get("/a.md");
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].id, "1");
         assert_eq!(items[0].colour, Colour::Yellow);
@@ -349,8 +278,7 @@ mod tests {
     fn load_missing_file_is_default() {
         let dir = tempfile::tempdir().unwrap();
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        assert!(loaded.file.files.is_empty());
-        assert!(loaded.legacy.is_none());
+        assert!(loaded.files.is_empty());
     }
 
     #[test]
@@ -361,8 +289,7 @@ mod tests {
         std::fs::write(&path, original).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        assert!(loaded.file.files.is_empty());
-        assert!(loaded.legacy.is_none());
+        assert!(loaded.files.is_empty());
         assert!(!path.exists());
 
         let preserved = std::fs::read_dir(dir.path())
@@ -388,7 +315,7 @@ mod tests {
         .unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        assert!(loaded.file.files.is_empty());
+        assert!(loaded.files.is_empty());
         assert!(!path.exists());
         assert!(std::fs::read_dir(dir.path()).unwrap().any(|e| {
             e.ok()
@@ -444,44 +371,64 @@ mod tests {
     }
 
     #[test]
-    fn load_legacy_v1_returns_it_for_migration() {
+    fn load_v1_file_is_treated_as_corrupt() {
+        // A stray upstream marky v1 file (which stores passage text) cannot
+        // legitimately appear at this path — marky wrote under its own app
+        // data directory — so it goes through the corrupt-file path:
+        // preserved, and the store falls back to the empty default.
         let dir = tempfile::tempdir().unwrap();
         let v1 = r#"{"version":1,"files":{"/a.md":[{"id":"1","filePath":"/a.md","colour":"yellow","sourceStartLine":3,"sourceEndLine":5,"passage":"Run npm install","occurrence":0,"section":"Install","createdAt":"2026-04-29T00:00:00.000Z","note":"do it twice"}]}}"#;
         let path = dir.path().join(FILE_NAME);
         std::fs::write(&path, v1).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        assert!(loaded.file.files.is_empty());
-        let legacy = loaded.legacy.expect("v1 parsed");
-        let items = legacy.files.get("/a.md").unwrap();
-        assert_eq!(items[0].passage, "Run npm install");
-        assert_eq!(items[0].note.as_deref(), Some("do it twice"));
-        // The file on disk is untouched by the load.
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), v1);
+        assert!(loaded.files.is_empty());
+        assert!(!path.exists());
+
+        let preserved = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .find(|name| name.starts_with("highlights.json.corrupt-"))
+            .expect("corrupt backup present");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(preserved)).unwrap(),
+            v1
+        );
     }
 
     #[test]
-    fn saving_replaces_legacy_v1_and_keeps_no_backup() {
-        // The reference-only rule: no v1 passage text may survive on disk
-        // after the first save, so the replacement must not preserve a copy.
+    fn concurrent_update_path_to_different_paths_keeps_both() {
+        // save_highlights does load → set → save on the whole file; two
+        // concurrent callers writing different paths must not lose each
+        // other's update.
         let dir = tempfile::tempdir().unwrap();
-        let v1 = r#"{"version":1,"files":{"/a.md":[{"id":"1","filePath":"/a.md","colour":"yellow","sourceStartLine":0,"sourceEndLine":1,"passage":"some text","occurrence":0,"section":"","createdAt":"t"}]}}"#;
-        let path = dir.path().join(FILE_NAME);
-        std::fs::write(&path, v1).unwrap();
-
-        let mut f = HighlightsFile::default();
-        f.set("/a.md".into(), vec![h("1", Colour::Yellow, 0, 1)]);
-        f.save(dir.path()).unwrap();
-
-        let raw = std::fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("\"version\": 2"));
-        assert!(!raw.contains("some text"));
-        // Only the v2 file remains — no legacy-v1 backup was written.
-        let entries: Vec<String> = std::fs::read_dir(dir.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        let n = 8;
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let path = dir.path().to_path_buf();
+                std::thread::spawn(move || {
+                    let id = i;
+                    HighlightsFile::update_path(
+                        &path,
+                        format!("/file-{}.md", id),
+                        vec![h(&id.to_string(), Colour::Blue, 0, 1)],
+                    )
+                    .unwrap();
+                })
+            })
             .collect();
-        assert_eq!(entries, vec!["highlights.json".to_string()]);
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let loaded = HighlightsFile::load(dir.path()).unwrap();
+        assert_eq!(loaded.files.len(), n);
+        for i in 0..n {
+            let items = loaded.get(&format!("/file-{}.md", i));
+            assert_eq!(items.len(), 1, "path for file-{} was lost", i);
+            assert_eq!(items[0].id, i.to_string());
+        }
     }
 
     #[test]
@@ -492,41 +439,5 @@ mod tests {
         // Clearing a file's highlights is just setting an empty list.
         f.set("/a.md".into(), vec![]);
         assert!(f.files.is_empty());
-    }
-
-    #[test]
-    fn legacy_serialization_uses_upstream_field_names() {
-        let mut legacy = LegacyHighlightsFile {
-            version: 1,
-            files: HashMap::new(),
-        };
-        legacy.files.insert(
-            "/a.md".into(),
-            vec![LegacyHighlight {
-                id: "1".into(),
-                file_path: "/a.md".into(),
-                colour: "yellow".into(),
-                source_start_line: 3,
-                source_end_line: 5,
-                passage: "Run npm install".into(),
-                occurrence: 0,
-                section: "Install".into(),
-                created_at: "2026-04-29T00:00:00.000Z".into(),
-                note: Some("twice".into()),
-            }],
-        );
-        let raw = serde_json::to_string(&legacy).unwrap();
-        assert!(raw.contains("\"filePath\""));
-        assert!(raw.contains("\"sourceStartLine\""));
-        assert!(raw.contains("\"sourceEndLine\""));
-        assert!(raw.contains("\"passage\""));
-        assert!(raw.contains("\"occurrence\""));
-        assert!(raw.contains("\"createdAt\""));
-        // Round-trips through our own serialization.
-        let back: LegacyHighlightsFile = serde_json::from_str(&raw).unwrap();
-        assert_eq!(
-            back.files.get("/a.md").unwrap()[0].passage,
-            "Run npm install"
-        );
     }
 }

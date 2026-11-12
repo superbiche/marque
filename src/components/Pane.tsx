@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { PaneState, TabState } from "@/lib/workspace";
 import { TabBar } from "@/components/TabBar";
 import { Viewer } from "@/components/Viewer";
@@ -18,6 +18,12 @@ interface Props {
   fragment?: string;
   onFragmentHandled: () => void;
   onContentRendered?: (paneId: string) => void;
+  /**
+   * Report this pane's rendered article (or null when it has none) so the
+   * app can target per-pane custom events such as the highlight jump.
+   * Called after every render completion and when the active tab empties.
+   */
+  onArticleChange?: (paneId: string, el: HTMLElement | null) => void;
   onRevealFile: (filePath?: string) => void;
   onCopyContent: (source?: string) => void;
   onCopyPath: (filePath?: string) => void;
@@ -39,6 +45,7 @@ export const Pane = memo(function Pane({
   fragment,
   onFragmentHandled,
   onContentRendered,
+  onArticleChange,
   onRevealFile,
   onCopyContent,
   onCopyPath,
@@ -49,10 +56,33 @@ export const Pane = memo(function Pane({
   const activeTab = pane.activeTabId ? tabs[pane.activeTabId] : undefined;
   const articleRef = useRef<HTMLElement>(null);
   const [contentNonce, setContentNonce] = useState(0);
+
+  // Keep the callback fresh without making handleRendered re-create (same
+  // reasoning as the Viewer's onRendered ref).
+  const onArticleChangeRef = useRef(onArticleChange);
+  useEffect(() => {
+    onArticleChangeRef.current = onArticleChange;
+  }, [onArticleChange]);
+
   const handleRendered = useCallback(() => {
     setContentNonce((nonce) => nonce + 1);
     onContentRendered?.(pane.id);
+    // After every render completion (including theme flips that remount the
+    // article) the registry sees this pane's current article node.
+    onArticleChangeRef.current?.(pane.id, articleRef.current);
   }, [onContentRendered, pane.id]);
+
+  // No active tab (or pane unmount): report null so the registry doesn't
+  // keep pointing at a removed article.
+  useEffect(() => {
+    if (!activeTab) {
+      onArticleChangeRef.current?.(pane.id, null);
+      return;
+    }
+    return () => {
+      onArticleChangeRef.current?.(pane.id, null);
+    };
+  }, [pane.id, activeTab]);
 
   return (
     <div
