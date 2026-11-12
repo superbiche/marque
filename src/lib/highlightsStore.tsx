@@ -136,10 +136,11 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // True from the instant a close-flush request arrives until the close is
   // cancelled. Mutations are refused while it is set: a save queued between
   // a successful flush and `confirmClose` — or mid-flush, racing the
-  // re-check loop — would never be persisted. It is cleared when a
-  // cancelled close settles; a cancel that *fails* keeps it set — the
-  // native guard may still be `Flushing` (its ceiling closes the window),
-  // so edits stay refused until the window closes.
+  // re-check loop — would never be persisted. It is cleared by the latest
+  // close-flush handler when a cancelled close settles; a cancel that
+  // *fails* keeps it set — the native guard may still be `Flushing` (its
+  // ceiling closes the window), so edits stay refused until the window
+  // closes.
   const closingRef = React.useRef(false);
   // The open "close without saving" offer: the per-path `gen` values at
   // the moment of the last *failed* close-flush. The frontend is the
@@ -151,6 +152,14 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // records a fresh offer and the close is cancelled again. Cleared on
   // every successful close-flush (nothing is left to close without).
   const discardOfferRef = React.useRef<Map<string, number> | null>(null);
+  // Monotonic token for close-flush handlers: bumped at the start of each
+  // and captured by it. A new close cycle can only begin after the previous
+  // cancel has landed natively, while that cancel's response is still in
+  // flight — so a stale handler's completion can arrive after the newer
+  // cycle has started. Only the handler holding the latest token may touch
+  // the shared close state (the gate, the discard offer, the user
+  // notifications); a stale one logs and does nothing.
+  const closeAttemptRef = React.useRef(0);
 
   React.useEffect(() => {
     localStorage.setItem(ACTIVE_COLOUR_KEY, activeColour);
@@ -487,18 +496,24 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // records a fresh offer and the close is cancelled again. A cancel
   // that itself fails keeps the mutation gate up (the native guard may
   // still be `Flushing`; its ceiling closes the window), so edits stay
-  // refused until the window closes.
+  // refused until the window closes. Each handler carries an attempt
+  // token: a stale completion (the previous cycle's cancel response
+  // landing after the next cycle has begun) logs and does nothing, so it
+  // can never clear the new cycle's gate or re-emit the warning.
   React.useEffect(() => {
     if (!inTauri()) return;
     let unlisten: UnlistenFn | null = null;
     let disposed = false;
     onHighlightsFlushRequest(() => {
       if (disposed) return;
+      const attempt = ++closeAttemptRef.current;
+      const stale = () => attempt !== closeAttemptRef.current;
       // From the instant the request arrives, gate the mutations: a
       // mutation between a successful flush and `confirmClose` — or while
       // the flush is running — would queue a save the window is about to
-      // destroy and never persist. The gate is cleared when a cancelled
-      // close settles (a failed *cancel* keeps it up — see below).
+      // destroy and never persist. The gate is cleared by the latest
+      // handler when a cancelled close settles (a failed *cancel* keeps it
+      // up — see below).
       closingRef.current = true;
       void (async () => {
         try {
@@ -506,7 +521,15 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
         } catch {
           // the ack failed: Rust's 2-second fallback will destroy the window
         }
+        if (stale()) {
+          console.debug(`close attempt ${attempt} is stale; not flushing`);
+          return;
+        }
         const { ok } = (await flushRef.current?.()) ?? { ok: false };
+        if (stale()) {
+          console.debug(`close attempt ${attempt} is stale; not settling the close`);
+          return;
+        }
         if (ok) {
           // Every accepted edit is persisted: settle any open discard
           // offer (there is nothing left to close without) and confirm
@@ -541,11 +564,23 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
             // mutation never lands while the guard is still mid-cancel.
             try {
               await tauri.cancelClose();
+              if (stale()) {
+                console.debug(
+                  `close attempt ${attempt} is stale; not clearing the mutation gate`,
+                );
+                return;
+              }
               closingRef.current = false;
               notifyApp(
                 "Couldn't save highlights. Close the window again to close without saving them.",
               );
             } catch (err) {
+              if (stale()) {
+                console.debug(
+                  `close attempt ${attempt} is stale; not reporting the failed cancel`,
+                );
+                return;
+              }
               // The cancel call itself failed (the native guard may
               // still be `Flushing` and its 30-second ceiling destroys
               // the window either way): keep the gate up — clearing it

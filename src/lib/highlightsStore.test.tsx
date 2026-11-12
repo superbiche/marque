@@ -148,8 +148,10 @@ beforeEach(() => {
   m.ackCloseRequest.mockImplementation(() => Promise.resolve());
   m.confirmClose.mockImplementation(() => Promise.resolve());
   m.cancelClose.mockImplementation(() => Promise.resolve());
-  // The store logs load/save failures; keep the test output clean.
+  // The store logs load/save failures and stale close completions; keep the
+  // test output clean.
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "debug").mockImplementation(() => {});
 });
 
 afterEach(() => {
@@ -433,6 +435,21 @@ describe("F6: limits are enforced before the mutation", () => {
     app.unmount();
   });
 });
+
+/** A Promise with externally resolvable/rejectable handles. */
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (v: T | PromiseLike<T>) => void;
+  reject: (e?: unknown) => void;
+} {
+  let resolve!: (v: T | PromiseLike<T>) => void;
+  let reject!: (e?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
 
 /** A save mock whose calls hang until released, one at a time, in order. */
 function hangingSaves() {
@@ -802,6 +819,59 @@ describe("F7: the close flush", () => {
     expect(m.notifyApp).toHaveBeenLastCalledWith(
       "Highlights are read-only until the window closes.",
     );
+    app.unmount();
+  });
+
+  it("a stale cancel response from the previous cycle does not clear the new cycle's gate", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    // Close A: the flush fails, the discard offer is recorded, and A's
+    // cancelClose *response* is held in flight.
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves(); // the edit's save fails: one streak notification
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+
+    const ac = deferred<void>();
+    m.cancelClose.mockImplementationOnce(() => ac.promise);
+    m.flushListeners[0]();
+    await drainSaves(); // A's flush fails; A is awaiting its held cancel
+    expect(m.saveHighlights).toHaveBeenCalledTimes(2); // the edit + the flush's retry
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).toHaveBeenCalledTimes(1); // the "close again" warning is still behind the held cancel
+
+    // Close B: A's cancel has landed natively (only then can a new cycle
+    // begin), but its response is still in flight. B's save hangs.
+    const bs = deferred<void>();
+    m.saveHighlights.mockImplementation(() => bs.promise);
+    m.flushListeners[0]();
+    await drainSaves(); // B's flush retry hangs
+    expect(m.saveHighlights).toHaveBeenCalledTimes(3);
+    expect(m.confirmClose).not.toHaveBeenCalled();
+
+    // A's cancel response lands now — after B's handler has started. A is
+    // stale: it must not clear the gate, change any state, or re-emit the
+    // "close again" warning.
+    ac.resolve(undefined);
+    await drainSaves();
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+
+    // B's gate is still up: a mutation is refused — the in-memory state is
+    // unchanged and no save is queued.
+    act(() => app.ctx.updateHighlight(A, "a2", { colour: "pink" }));
+    expect(app.ctx.byFile[A]).toEqual([a1, a2]); // a2 still yellow
+    expect(m.saveHighlights).toHaveBeenCalledTimes(3);
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+
+    // B's save lands: the flush succeeds, so B confirms the close.
+    bs.resolve(undefined);
+    await drainSaves();
+    expect(m.confirmClose).toHaveBeenCalledTimes(1);
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).toHaveBeenCalledTimes(1); // only the edit's streak notification
     app.unmount();
   });
 });
