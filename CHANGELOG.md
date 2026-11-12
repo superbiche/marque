@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
-## [Unreleased]
+## [0.4.10] - 2026-11-12
 
 ### Added
 - macOS: a native menu bar (File, Edit, View, Window, Help) carries marque's actions and shortcuts; Linux and Windows are unchanged. (Remaining part of GRVYDEV/marky#15 by @cjthompson, adapted.)
