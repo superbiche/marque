@@ -10,6 +10,9 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 
 ## [Unreleased]
 
+### Added
+- macOS: a native menu bar (File, Edit, View, Window, Help) carries marque's actions and shortcuts; Linux and Windows are unchanged. (Remaining part of GRVYDEV/marky#15 by @cjthompson, adapted.)
+
 ### Fixed
 - Windows: the NSIS installer registers a `QuietUninstallString`, so `winget uninstall` and other package managers remove Marque silently instead of opening the interactive uninstaller.
 

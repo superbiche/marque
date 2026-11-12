@@ -11,7 +11,16 @@ import { TableOfContents } from "@/components/TableOfContents";
 import { Toolbar } from "@/components/Toolbar";
 import { CommandPalette } from "@/components/CommandPalette";
 import { Notifications, notifyApp } from "@/components/Notifications";
-import { tauri, onCliTarget, onFolderChanged, onFileChanged, type AnnotatedFolder } from "@/lib/tauri";
+import {
+  tauri,
+  onCliTarget,
+  onFolderChanged,
+  onFileChanged,
+  onMenuAction,
+  type AnnotatedFolder,
+  type MenuActionId,
+} from "@/lib/tauri";
+import { isMacOS, nativeMenuOwnsKey } from "@/lib/menuShortcuts";
 import {
   createInitialState,
   reduce,
@@ -222,45 +231,6 @@ function AppShell() {
     }
   }, [resolved, setPrintLight, state.activePaneId]);
 
-  // Global keyboard shortcuts.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const meta = e.metaKey || e.ctrlKey;
-      const k = e.key.toLowerCase();
-      if (meta && k === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-      } else if (meta && k === "o") {
-        e.preventDefault();
-        handlePickFile();
-      } else if (meta && k === "f") {
-        e.preventDefault();
-        setSearchPaneId(state.activePaneId);
-      } else if (meta && k === "p") {
-        e.preventDefault();
-        handlePrint();
-      } else if (meta && e.key === "\\") {
-        e.preventDefault();
-        dispatch({ type: "SPLIT", direction: e.shiftKey ? "horizontal" : "vertical" });
-      } else if (meta && k === "w") {
-        e.preventDefault();
-        const tabId = activePane.activeTabId;
-        if (tabId) dispatch({ type: "CLOSE_TAB", tabId, paneId: activePane.id });
-      } else if (meta && (e.key === "=" || e.key === "+")) {
-        e.preventDefault();
-        contentZoomIn();
-      } else if (meta && e.key === "-") {
-        e.preventDefault();
-        contentZoomOut();
-      } else if (meta && k === "0") {
-        e.preventDefault();
-        contentZoomReset();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [state.activePaneId, activePane.activeTabId, activePane.id, contentZoomIn, contentZoomOut, contentZoomReset, handlePrint]);
-
   // File drop opens as new tab.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -370,6 +340,135 @@ function AppShell() {
       notifyApp("Could not unpin the file.");
     }
   }, []);
+
+  // Single action dispatcher shared by the keydown handler and the native
+  // macOS menu, which emits the same ids via a `menu://action` event
+  // (see `src-tauri/src/menu.rs`).
+  const handleAppAction = useCallback((id: MenuActionId) => {
+    switch (id) {
+      case "palette":
+        setPaletteOpen((v) => !v);
+        break;
+      case "open_file":
+        void handlePickFile();
+        break;
+      case "find":
+        setSearchPaneId(state.activePaneId);
+        break;
+      case "print":
+        void handlePrint();
+        break;
+      case "split_right":
+        dispatch({ type: "SPLIT", direction: "vertical" });
+        break;
+      case "split_down":
+        dispatch({ type: "SPLIT", direction: "horizontal" });
+        break;
+      case "close_tab":
+        if (activePane.activeTabId) {
+          dispatch({ type: "CLOSE_TAB", tabId: activePane.activeTabId, paneId: activePane.id });
+        }
+        break;
+      case "close_split":
+        handleCloseSplit();
+        break;
+      case "zoom_in":
+        contentZoomIn();
+        break;
+      case "zoom_out":
+        contentZoomOut();
+        break;
+      case "zoom_reset":
+        contentZoomReset();
+        break;
+      case "reveal":
+        handleRevealActiveFile();
+        break;
+      case "copy_markdown":
+        handleCopyActiveContent();
+        break;
+    }
+  }, [
+    state.activePaneId,
+    handlePickFile,
+    handlePrint,
+    activePane,
+    handleCloseSplit,
+    contentZoomIn,
+    contentZoomOut,
+    contentZoomReset,
+    handleRevealActiveFile,
+    handleCopyActiveContent,
+  ]);
+
+  // The menu listener registers once; the ref keeps it from holding a stale
+  // dispatcher (the other event listeners above use identity-stable callbacks,
+  // which this one is not).
+  const appActionRef = useRef(handleAppAction);
+  useEffect(() => {
+    appActionRef.current = handleAppAction;
+  }, [handleAppAction]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | undefined;
+    (async () => {
+      const off = await onMenuAction((id) => appActionRef.current(id));
+      if (cancelled) off();
+      else unlisten = off;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // Global keyboard shortcuts.
+  useEffect(() => {
+    const mac = isMacOS();
+    const onKey = (e: KeyboardEvent) => {
+      // On macOS the native menu owns these accelerators: AppKit runs the
+      // menu's action (and preventDefault stops webview built-ins such as
+      // the ⌘F find bar), so reacting here too would fire it twice.
+      if (nativeMenuOwnsKey(mac, e)) {
+        e.preventDefault();
+        return;
+      }
+      const meta = e.metaKey || e.ctrlKey;
+      const k = e.key.toLowerCase();
+      if (meta && k === "k") {
+        e.preventDefault();
+        handleAppAction("palette");
+      } else if (meta && k === "o") {
+        e.preventDefault();
+        handleAppAction("open_file");
+      } else if (meta && k === "f") {
+        e.preventDefault();
+        handleAppAction("find");
+      } else if (meta && k === "p") {
+        e.preventDefault();
+        handleAppAction("print");
+      } else if (meta && (e.key === "\\" || e.key === "|")) {
+        // Shift+\ reports "|" on US layouts.
+        e.preventDefault();
+        handleAppAction(e.shiftKey || e.key === "|" ? "split_down" : "split_right");
+      } else if (meta && k === "w") {
+        e.preventDefault();
+        handleAppAction("close_tab");
+      } else if (meta && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        handleAppAction("zoom_in");
+      } else if (meta && e.key === "-") {
+        e.preventDefault();
+        handleAppAction("zoom_out");
+      } else if (meta && k === "0") {
+        e.preventDefault();
+        handleAppAction("zoom_reset");
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [handleAppAction]);
 
   const pinnedPaths = useMemo(() => new Set(pinnedFiles), [pinnedFiles]);
 

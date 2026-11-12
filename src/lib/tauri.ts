@@ -104,6 +104,29 @@ export function onFolderWatchLimit(cb: (limit: WatchLimit) => void): Promise<Unl
 }
 
 /**
+ * Ids the native macOS menu can emit (see `src-tauri/src/menu.rs`).
+ * `help_github` and `close_window` are handled in Rust and never arrive.
+ */
+export type MenuActionId =
+  | "open_file"
+  | "close_tab"
+  | "reveal"
+  | "copy_markdown"
+  | "print"
+  | "palette"
+  | "find"
+  | "split_right"
+  | "split_down"
+  | "close_split"
+  | "zoom_in"
+  | "zoom_out"
+  | "zoom_reset";
+
+export function onMenuAction(cb: (id: MenuActionId) => void): Promise<UnlistenFn> {
+  return listen<MenuActionId>("menu://action", (e) => cb(e.payload));
+}
+
+/**
  * URL the webview may load for a local file, through the Tauri asset protocol.
  * The backend extends the protocol scope when a document is opened
  * (`read_file`), so only files next to an opened document resolve. Returns

@@ -3,6 +3,7 @@ mod commands;
 mod error;
 mod folder;
 mod fs;
+mod menu;
 mod registry;
 mod search;
 mod settings;
@@ -69,6 +70,9 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             handle_target(app, cli::resolve(&argv));
         }))
+        // Route native menu item clicks. Dormant on Linux/Windows: no menu is
+        // installed there, so no menu event can ever arrive.
+        .on_menu_event(menu::handle_event)
         .setup(move |app| {
             settings::migrate_legacy_settings();
             let dir = settings_dir();
@@ -94,6 +98,18 @@ pub fn run() {
             app.manage(Arc::clone(&registry));
             app.manage(Arc::clone(&watchers));
             hydrate_folders(app.handle().clone(), registry, watchers);
+
+            // Replace Tauri's default macOS menu bar with marque's own menu.
+            // On other platforms no menu is installed and every shortcut is
+            // handled by the webview keydown handler.
+            #[cfg(target_os = "macos")]
+            {
+                let menu = menu::build_menu(app.handle())?;
+                // The returned `Option` is the previously installed menu (none
+                // yet at setup time); we don't need it.
+                let _ = menu.set_as_app_menu()?;
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
