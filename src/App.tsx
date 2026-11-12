@@ -38,7 +38,7 @@ A fast markdown viewer with folder support.
 - Press **⌘K** to open the command palette and search files.
 - Press **⌘O** to open a file. **⌘F** searches inside the open document.
 - Add a folder from the sidebar; it stays available across sessions.
-- **⌘\\** splits the active pane vertically. **⌘⇧\\** splits horizontally.
+- **⌘\\\\** splits the active pane vertically. **⌘⇧\\\\** splits horizontally.
 - Drop a file onto the window to open it as a new tab.
 
 Launch from the terminal:
@@ -427,13 +427,10 @@ function AppShell() {
   useEffect(() => {
     const mac = isMacOS();
     const onKey = (e: KeyboardEvent) => {
-      // On macOS the native menu owns these accelerators: AppKit runs the
-      // menu's action (and preventDefault stops webview built-ins such as
-      // the ⌘F find bar), so reacting here too would fire it twice.
-      if (nativeMenuOwnsKey(mac, e)) {
-        e.preventDefault();
-        return;
-      }
+      // On macOS the native menu owns these accelerators. WKWebView hands a
+      // key equivalent to the menu only when the page leaves it unhandled, so
+      // neither act on it nor preventDefault here.
+      if (nativeMenuOwnsKey(mac, e)) return;
       const meta = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
       if (meta && k === "k") {
