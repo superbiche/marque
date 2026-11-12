@@ -1,9 +1,17 @@
 import * as React from "react";
 import { HIGHLIGHT_COLOURS, MAX_NOTE_LENGTH, type Highlight, type HighlightColour } from "@/lib/highlights";
+import { Button } from "@/components/ui/button";
 import { Trash2, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const FLASH_MS = 1200;
+
+/** True for an element the user can type into (a form field or a
+ *  contenteditable region). */
+function isEditableTarget(el: HTMLElement): boolean {
+  const tag = el.tagName?.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+}
 
 export interface HighlightEditPopoverState {
   /** Viewport position of the bottom-centre of the highlight. */
@@ -14,6 +22,8 @@ export interface HighlightEditPopoverState {
 
 interface Props {
   state: HighlightEditPopoverState | null;
+  /** The article to return focus to when the popover closes (a11y). */
+  articleRef?: React.RefObject<HTMLElement | null>;
   onRecolour: (id: string, colour: HighlightColour) => void;
   onUpdateNote: (id: string, note: string | undefined) => void;
   /** Copy the agent-ready block for this highlight; resolves on success. */
@@ -30,6 +40,7 @@ interface Props {
  */
 export function HighlightEditPopover({
   state,
+  articleRef,
   onRecolour,
   onUpdateNote,
   onCopy,
@@ -53,8 +64,21 @@ export function HighlightEditPopover({
     [],
   );
 
-  // When a new highlight is targeted, reset edit state and seed the draft.
+  // Cancel a pending delayed delete. It captures the *old* highlight in its
+  // closure, so it must not survive a close or a switch to a new target
+  // (item 12): otherwise it would fire against a stale or gone highlight.
+  const clearDeleteTimer = React.useCallback(() => {
+    if (deleteTimerRef.current !== null) {
+      window.clearTimeout(deleteTimerRef.current);
+      deleteTimerRef.current = null;
+    }
+  }, []);
+
+  // When a new highlight is targeted, reset edit state and seed the draft. A
+  // close (state → null) or a new target both invalidate any pending delayed
+  // delete.
   React.useEffect(() => {
+    clearDeleteTimer();
     if (!state) {
       setEditingNote(false);
       setDraftNote("");
@@ -62,15 +86,39 @@ export function HighlightEditPopover({
     }
     setEditingNote(false);
     setDraftNote(state.highlight.note ?? "");
-  }, [state?.highlight.id]);
+  }, [state?.highlight.id, clearDeleteTimer]);
 
   React.useEffect(() => {
     if (editingNote) inputRef.current?.focus();
   }, [editingNote]);
 
+  // Move focus into the popover on open and, on a close where focus has
+  // "dropped" (to body), return it to the article. The popover is non-modal
+  // (focus is never trapped) and we never steal a focus the user just placed
+  // elsewhere by clicking out.
+  const prevOpenRef = React.useRef(false);
+  React.useEffect(() => {
+    const open = state !== null;
+    if (open) {
+      ref.current?.focus();
+      prevOpenRef.current = true;
+    } else if (prevOpenRef.current) {
+      prevOpenRef.current = false;
+      const active = document.activeElement;
+      const noRealFocus =
+        active == null || active === document.body || active === document.documentElement;
+      if (noRealFocus) articleRef?.current?.focus();
+    }
+  }, [state, articleRef]);
+
   React.useEffect(() => {
     if (!state) return;
     const onKey = (e: KeyboardEvent) => {
+      // A global window listener: don't steal a keystroke typed into an
+      // editable control that lives *outside* this popover (the popover's own
+      // note field is inside `ref`, so it is handled as before).
+      const target = e.target as HTMLElement | null;
+      if (target && !ref.current?.contains(target) && isEditableTarget(target)) return;
       if (editingNote) {
         // Editor swallows its own keys; only the surrounding popover handles
         // dismiss / commit on global Escape and Cmd+Enter.
@@ -119,6 +167,7 @@ export function HighlightEditPopover({
   return (
     <div
       ref={ref}
+      tabIndex={-1}
       role="dialog"
       aria-label="Edit highlight"
       className="fixed z-50 flex max-w-sm flex-col gap-2 rounded-md border bg-popover p-2 shadow-md"
@@ -145,8 +194,10 @@ export function HighlightEditPopover({
           />
         ))}
         <div className="mx-1 h-4 w-px bg-border" />
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xs"
           onClick={() => {
             void (async () => {
               const ok = await onCopy(h);
@@ -160,24 +211,23 @@ export function HighlightEditPopover({
               }
             })();
           }}
-          className={cn(
-            "flex items-center gap-1 rounded-sm px-2 py-1 text-xs hover:bg-accent",
-            copyFlashing && "text-emerald-600 dark:text-emerald-400",
-          )}
+          className={cn(copyFlashing && "text-emerald-600 dark:text-emerald-400")}
           title="Copy agent-ready block"
         >
           {copyFlashing ? (
             <>
-              <Check className="h-3 w-3" /> Copied
+              <Check className="size-3" /> Copied
             </>
           ) : (
             <>
-              <Copy className="h-3 w-3" /> Copy
+              <Copy className="size-3" /> Copy
             </>
           )}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="destructive"
+          size="xs"
           disabled={deleteFlashing}
           onClick={() => {
             // Show inline "Deleted" briefly, then call onDelete (which
@@ -191,24 +241,19 @@ export function HighlightEditPopover({
               onDelete(h.id);
             }, 450);
           }}
-          className={cn(
-            "flex items-center gap-1 rounded-sm px-2 py-1 text-xs",
-            deleteFlashing
-              ? "text-emerald-600 dark:text-emerald-400"
-              : "text-destructive hover:bg-destructive/10",
-          )}
+          className={cn(deleteFlashing && "text-emerald-600 dark:text-emerald-400")}
           title="Delete (Del / Backspace)"
         >
           {deleteFlashing ? (
             <>
-              <Check className="h-3 w-3" /> Deleted
+              <Check className="size-3" /> Deleted
             </>
           ) : (
             <>
-              <Trash2 className="h-3 w-3" /> Delete
+              <Trash2 className="size-3" /> Delete
             </>
           )}
-        </button>
+        </Button>
       </div>
       {editingNote ? (
         <div className="flex flex-col gap-1">

@@ -241,8 +241,16 @@ export const Viewer = React.memo(function Viewer({
       // from the live list and are (re)applied below and on every change.
       renderCache.set(cacheKey, rootEl.innerHTML);
       attachCopyButtons(rootEl);
-      if (canApply && key) {
-        const resolution = resolveAnchors(rootEl, fileHighlightsRef.current, key);
+      // Re-read the key and load status *now*: Shiki/Mermaid rendered across
+      // several awaits, so the per-installation key or this document's read
+      // may have arrived during the pass. The early `key`/`canApply` above are
+      // only valid for the cached (isProcessed) branch, which never awaits;
+      // using them here would skip the apply even though anchoring is possible.
+      const keyNow = highlightsKeyRef.current;
+      const canApplyNow =
+        keyNow !== null && filePath !== undefined && getLoadStatus(filePath) === "loaded";
+      if (canApplyNow && keyNow) {
+        const resolution = resolveAnchors(rootEl, fileHighlightsRef.current, keyNow);
         applyAllHighlights(rootEl, resolution);
         publish(resolution);
       } else {
@@ -284,51 +292,79 @@ export const Viewer = React.memo(function Viewer({
     });
   }, [fileHighlights, filePath, renderState.key, highlightsKey, loadFile, getLoadStatus]);
 
+  // Refresh the selection popover from the live selection. `anchorFromSelection`
+  // is the single gate: it returns null for collapsed or out-of-article
+  // selections, for selections that touch a code block (code is never
+  // highlightable), and for selections that don't sit inside one source-mapped
+  // block (e.g. inside a mermaid diagram) — in all of those cases no popover
+  // is offered. Creation is also gated on the per-installation key and this
+  // document's read having landed (F3).
+  const refreshPopover = React.useCallback(() => {
+    const root = ref.current;
+    if (!root || !filePath) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      setPopover(null);
+      pendingSelection.current = null;
+      return;
+    }
+    // A fresh selection takes priority over any open edit popover.
+    setEditPopover(null);
+    const range = sel.getRangeAt(0);
+    const key = highlightsKeyRef.current;
+    if (!key || getLoadStatus(filePath) !== "loaded") {
+      setPopover(null);
+      pendingSelection.current = null;
+      return;
+    }
+    const anchor = anchorFromSelection(range, root as HTMLElement, key);
+    if (!anchor) {
+      setPopover(null);
+      pendingSelection.current = null;
+      return;
+    }
+    pendingSelection.current = {
+      anchor,
+      passage: sel.toString().trim(),
+    };
+    const rect = range.getBoundingClientRect();
+    setPopover({ x: rect.left + rect.width / 2, y: rect.bottom });
+  }, [filePath, getLoadStatus]);
+
   // Detect a text selection inside the article and surface the highlight
-  // popover. `anchorFromSelection` is the single gate: it returns null for
-  // collapsed or out-of-article selections, for selections that touch a
-  // code block (code is never highlightable), and for selections that don't
-  // sit inside one source-mapped block (e.g. inside a mermaid diagram) — in
-  // all of those cases no popover is offered.
+  // popover, from a mouse release or from a keyboard selection (Shift+Arrow,
+  // Shift+Home/End, …). Both paths go through the same `refreshPopover` gate;
+  // the selection-change path is debounced (it fires on every selection
+  // mutation) and is scoped to selections that touch this article, so a
+  // split pane only ever answers for its own document.
   React.useEffect(() => {
     const root = ref.current;
     if (!root || !filePath) return;
-
-    const onMouseUp = () => {
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-        setPopover(null);
-        pendingSelection.current = null;
-        return;
-      }
-      // A fresh selection takes priority over any open edit popover.
-      setEditPopover(null);
-      const range = sel.getRangeAt(0);
-      // Anchoring needs the per-installation key, and creation is disabled
-      // until this document's read has landed (F3) — until then no popover.
-      const key = highlightsKeyRef.current;
-      if (!key || getLoadStatus(filePath) !== "loaded") {
-        setPopover(null);
-        pendingSelection.current = null;
-        return;
-      }
-      const anchor = anchorFromSelection(range, root as HTMLElement, key);
-      if (!anchor) {
-        setPopover(null);
-        pendingSelection.current = null;
-        return;
-      }
-      pendingSelection.current = {
-        anchor,
-        passage: sel.toString().trim(),
-      };
-      const rect = range.getBoundingClientRect();
-      setPopover({ x: rect.left + rect.width / 2, y: rect.bottom });
+    let timer: number | null = null;
+    const schedule = () => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        refreshPopover();
+      }, 150);
     };
-
+    const onMouseUp = () => refreshPopover();
+    const onSelectionChange = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      if (root.contains(sel.anchorNode) || root.contains(sel.focusNode)) schedule();
+    };
     root.addEventListener("mouseup", onMouseUp);
-    return () => root.removeEventListener("mouseup", onMouseUp);
-  }, [filePath, renderState.key]);
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => {
+      root.removeEventListener("mouseup", onMouseUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+    // `refreshPopover` is stable per filePath (its volatile inputs are the key
+    // ref and the store's load-status reader); rebind on a remount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath, renderState.key, refreshPopover]);
 
   // Click on an existing highlight → open the edit popover for it. Skipped
   // when a non-collapsed selection is present (the mouseup path handled it).
@@ -667,18 +703,21 @@ export const Viewer = React.memo(function Viewer({
       <article
         key={renderState.key}
         ref={ref}
+        tabIndex={-1}
         className={`markdown-body markdown-width-${contentWidth}`}
         dangerouslySetInnerHTML={dangerousHtml}
       />
       <HighlightPopover
         state={popover}
         activeColour={activeColour}
+        articleRef={ref}
         onApply={onApply}
         onCopyForAgent={onCopyForAgent}
         onDismiss={onDismissPopover}
       />
       <HighlightEditPopover
         state={editPopover}
+        articleRef={ref}
         onRecolour={onRecolour}
         onUpdateNote={onUpdateNote}
         onCopy={onCopyExisting}

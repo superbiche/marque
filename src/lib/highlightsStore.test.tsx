@@ -43,7 +43,9 @@ const m = vi.hoisted(() => {
     getHighlights: vi.fn(),
     saveHighlights: vi.fn(),
     getHighlightsKey: vi.fn(),
+    ackCloseRequest: vi.fn(),
     confirmClose: vi.fn(),
+    cancelClose: vi.fn(),
     notifyApp: vi.fn(),
     onHighlightsFlushRequest: (cb: () => void) => {
       flushListeners.push(cb);
@@ -57,7 +59,9 @@ vi.mock("@/lib/tauri", () => ({
     getHighlights: (path: string) => m.getHighlights(path),
     saveHighlights: (path: string, highlights: unknown) => m.saveHighlights(path, highlights),
     getHighlightsKey: () => m.getHighlightsKey(),
+    ackCloseRequest: () => m.ackCloseRequest(),
     confirmClose: () => m.confirmClose(),
+    cancelClose: () => m.cancelClose(),
   },
   onHighlightsFlushRequest: (cb: () => void) => m.onHighlightsFlushRequest(cb),
 }));
@@ -138,7 +142,9 @@ beforeEach(() => {
   m.getHighlights.mockImplementation(() => Promise.resolve({ version: 2, highlights: [] }));
   m.saveHighlights.mockImplementation(() => Promise.resolve());
   m.getHighlightsKey.mockImplementation(() => Promise.resolve(KEY_HEX));
+  m.ackCloseRequest.mockImplementation(() => Promise.resolve());
   m.confirmClose.mockImplementation(() => Promise.resolve());
+  m.cancelClose.mockImplementation(() => Promise.resolve());
   // The store logs load/save failures; keep the test output clean.
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -169,6 +175,32 @@ describe("key loading (F2, store side)", () => {
     m.getHighlightsKey.mockImplementationOnce(() => Promise.reject(new Error("no key file")));
     const app = await mount();
     expect(app.ctx.highlightsKey).toBeNull();
+    app.unmount();
+  });
+
+  it("reports a key failure once (not per loadFile) and recovers when the read later succeeds", async () => {
+    m.getHighlightsKey.mockImplementation(() => Promise.reject(new Error("no key file")));
+    const app = await mount();
+    await drainSaves(); // let the mount fetch's finally() release the in-flight guard
+    // First (mount) attempt fails: one notification, key null.
+    expect(m.getHighlightsKey).toHaveBeenCalledTimes(1);
+    expect(app.ctx.highlightsKey).toBeNull();
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).toHaveBeenCalledWith(
+      "Highlights are unavailable: the highlights key could not be read.",
+    );
+    // A loadFile retries the read; still failing, it adds no second notification.
+    await loadFile(app.ctx, A, []);
+    expect(m.getHighlightsKey).toHaveBeenCalledTimes(2);
+    expect(app.ctx.highlightsKey).toBeNull();
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+    // Once the read succeeds (a key created since first launch), the retry
+    // lands and no further notification is made.
+    m.getHighlightsKey.mockImplementation(() => Promise.resolve(KEY_HEX));
+    await loadFile(app.ctx, B, []);
+    expect(m.getHighlightsKey).toHaveBeenCalledTimes(3);
+    expect(app.ctx.highlightsKey).toBeInstanceOf(Uint8Array);
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
     app.unmount();
   });
 });
@@ -371,6 +403,32 @@ describe("F6: limits are enforced before the mutation", () => {
     expect(m.saveHighlights).not.toHaveBeenCalled();
     app.unmount();
   });
+
+  it("undoDelete refuses to restore over the per-file cap and keeps lastDeleted", async () => {
+    const app = await mount();
+    const many = Array.from({ length: MAX_HIGHLIGHTS_PER_FILE }, (_, i) => makeHighlight(`h${i}`));
+    await loadFile(app.ctx, A, many);
+    // Delete one (the undo target), then fill the freed slot with a new one so
+    // the file is back at the cap.
+    act(() => app.ctx.removeHighlight(A, "h0"));
+    expect(app.ctx.byFile[A]?.length).toBe(MAX_HIGHLIGHTS_PER_FILE - 1);
+    const extra = makeHighlight("extra");
+    act(() => app.ctx.addHighlight(A, extra));
+    expect(app.ctx.byFile[A]?.length).toBe(MAX_HIGHLIGHTS_PER_FILE);
+    await drainSaves();
+
+    // Restoring the deleted highlight would exceed the cap: refuse, keep it.
+    act(() => app.ctx.undoDelete());
+    expect(app.ctx.byFile[A]?.length).toBe(MAX_HIGHLIGHTS_PER_FILE); // unchanged
+    expect(app.ctx.byFile[A]?.some((h) => h.id === "h0")).toBe(false);
+    expect(m.notifyApp).toHaveBeenCalledWith(
+      `Can't add more highlights to a.md (the ${MAX_HIGHLIGHTS_PER_FILE}-per-file limit is reached).`,
+    );
+    // lastDeleted is kept, so the undo stays available (the timer is not reset).
+    expect(app.ctx.lastDeleted?.path).toBe(A);
+    expect(app.ctx.lastDeleted?.highlight.id).toBe("h0");
+    app.unmount();
+  });
 });
 
 /** A save mock whose calls hang until released, one at a time, in order. */
@@ -446,7 +504,7 @@ describe("F7: the close flush", () => {
     app.unmount();
   });
 
-  it("a failed flush does not trap the close, and the next mutation retries the save", async () => {
+  it("a failed close flush cancels (not confirms), tells the user to close again; the next mutation retries", async () => {
     const app = await mount();
     const a1 = makeHighlight("a1");
     const a2 = makeHighlight("a2");
@@ -454,15 +512,27 @@ describe("F7: the close flush", () => {
 
     m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
     act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves(); // the edit's save fails: one streak notification
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+
     m.flushListeners[0]();
     await drainSaves();
-    expect(m.confirmClose).toHaveBeenCalledTimes(1); // not trapped
-    // One notification for the whole failure streak (the edit and the flush).
-    expect(m.notifyApp).toHaveBeenCalledTimes(1);
-    expect(m.notifyApp).toHaveBeenCalledWith(
+    // Not trapped: the close is cancelled (the window stays open), not confirmed.
+    expect(m.confirmClose).not.toHaveBeenCalled();
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    // The flush's retried save stayed silent (same streak); the failed close
+    // does tell the user to close again to close without saving.
+    expect(m.notifyApp).toHaveBeenCalledTimes(2);
+    expect(m.notifyApp).toHaveBeenNthCalledWith(
+      1,
       "Couldn't save highlights for a.md. Will retry on the next change or when you close the window.",
     );
+    expect(m.notifyApp).toHaveBeenNthCalledWith(
+      2,
+      "Couldn't save highlights. Close the window again to close without saving.",
+    );
 
+    // The next mutation retries the save (which now succeeds).
     m.saveHighlights.mockImplementation(() => Promise.resolve());
     act(() => app.ctx.updateHighlight(A, "a2", { colour: "pink" }));
     await drainSaves();
@@ -470,6 +540,62 @@ describe("F7: the close flush", () => {
       A,
       expect.arrayContaining([expect.objectContaining({ id: "a2", colour: "pink" })]),
     );
+    app.unmount();
+  });
+
+  it("flush re-checks and persists a path edited on a different path while it waits", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    const b1 = makeHighlight("b1");
+    const b2 = makeHighlight("b2");
+    await loadFile(app.ctx, A, [a1]);
+    await loadFile(app.ctx, B, [b1]);
+
+    const saves = hangingSaves();
+    act(() => app.ctx.addHighlight(A, a2)); // A's save hangs
+    await drainSaves();
+
+    let ok: boolean | undefined;
+    const done = app.ctx.flush().then((r) => {
+      ok = r.ok;
+    });
+    await drainSaves();
+    expect(ok).toBeUndefined(); // flush is waiting on A
+
+    // An edit on a *different* path while the flush is in flight makes B
+    // dirty mid-flush; the re-check loop must pick it up on a later pass.
+    act(() => app.ctx.addHighlight(B, b2));
+    await drainSaves();
+
+    // Release A: the first pass completes, sees B now dirty, and re-queues.
+    await saves.release();
+    expect(ok).toBeUndefined(); // still waiting: B's save is not yet released
+    // Release B: the second pass persists B and the flush lands.
+    await saves.release();
+    await act(async () => {
+      await done;
+    });
+    expect(ok).toBe(true);
+    expect(m.saveHighlights).toHaveBeenNthCalledWith(1, A, [a1, a2]);
+    expect(m.saveHighlights).toHaveBeenNthCalledWith(2, B, [b1, b2]);
+    app.unmount();
+  });
+
+  it("flush reports ok:false when a save keeps failing (a pass makes no progress)", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    await loadFile(app.ctx, A, [a1]);
+
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, makeHighlight("a2")));
+    await drainSaves();
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = (await app.ctx.flush()).ok;
+    });
+    expect(ok).toBe(false);
     app.unmount();
   });
 });

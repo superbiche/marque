@@ -33,6 +33,7 @@ use anyhow::Context;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -147,8 +148,11 @@ impl HighlightsFile {
     /// and non-absolute path keys are dropped. When anything is dropped
     /// the *original* file is first *copied* (never renamed) to
     /// `highlights.json.invalid-<timestamp>` (0600 on Unix) so a later
-    /// save cannot destroy the user's data; the live file stays and is
-    /// re-filtered on every subsequent load.
+    /// save cannot destroy the user's data, and the *filtered* store is
+    /// then written back over the live file atomically, so the next load
+    /// is clean and a re-filtering backup does not accumulate on every
+    /// load. A failure of that write-back fails the load: the live file
+    /// stays as found and the original remains in the backup.
     pub fn load(dir: &Path) -> AppResult<HighlightsFile> {
         let p = dir.join(FILE_NAME);
         if !p.exists() {
@@ -219,8 +223,8 @@ impl HighlightsFile {
                 }
                 // When anything is dropped, keep the original as a 0600
                 // *copy* (not a rename) so a later save cannot destroy the
-                // user's data; the live file stays and is re-filtered on
-                // every subsequent load.
+                // user's data; the filtered store is written back over
+                // the live file below so the next load is clean.
                 if dropped_paths + truncated + dropped_entries > 0 {
                     // No backup, no load: a filtered store that could not be
                     // preserved must never reach a save that would make the
@@ -242,6 +246,11 @@ impl HighlightsFile {
                 }
                 // Drop paths left empty by the filtering.
                 file.files.retain(|_, list| !list.is_empty());
+                // The filtered store replaces the live file (same atomic
+                // path as a normal save); a failure fails the load, so
+                // the file is left as found and the original stays in
+                // the backup.
+                file.save(dir)?;
                 Ok(file)
             }
             Err(_) => {
@@ -257,13 +266,28 @@ impl HighlightsFile {
     }
 
     /// Atomic write: serialize to a temp file in the same directory, then
-    /// rename over the target.
+    /// rename over the target. The temp file is created 0600 on Unix so
+    /// the live file — which holds notes — is owner-only like its backups.
     pub fn save(&self, dir: &Path) -> AppResult<()> {
         std::fs::create_dir_all(dir)?;
         let _guard = SAVE_LOCK.lock();
         let p = dir.join(FILE_NAME);
         let tmp = dir.join(format!("{FILE_NAME}.tmp.{}", std::process::id()));
         let raw = serde_json::to_string_pretty(self)?;
+        // A stale temp from a crashed earlier save is replaced, not
+        // appended to.
+        let _ = std::fs::remove_file(&tmp);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(raw.as_bytes())?;
+        }
+        #[cfg(not(unix))]
         std::fs::write(&tmp, raw)?;
         std::fs::rename(&tmp, &p)?;
         Ok(())
@@ -1117,8 +1141,10 @@ mod tests {
         );
     }
 
-    /// A filtered store whose original cannot be preserved is not loaded, so
-    /// no later save can make the loss permanent; the live file is untouched.
+    /// A filtered store whose original cannot be preserved is not loaded,
+    /// so no later save can make the loss permanent. The write-back of the
+    /// filtered store cannot happen either, so the live file stays exactly
+    /// as found.
     #[cfg(unix)]
     #[test]
     fn load_fails_when_the_invalid_backup_cannot_be_written() {
@@ -1165,10 +1191,11 @@ mod tests {
         assert_eq!(items[0].id, id("1"));
         assert_eq!(items[0].note, Some("a".repeat(MAX_NOTE_CHARS)));
 
-        // The live file is left intact (re-filtered on each later load).
+        // The live file is replaced by the filtered store (one entry);
+        // only the backup still holds both.
         let live: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(live["files"][DOC_A].as_array().unwrap().len(), 2);
+        assert_eq!(live["files"][DOC_A].as_array().unwrap().len(), 1);
 
         // A single owner-only copy of the original.
         let backups = invalid_backups(dir.path());
@@ -1176,6 +1203,65 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
         #[cfg(unix)]
         assert_owner_only(&backups[0]);
+    }
+
+    /// A load that filters invalid entries writes the filtered store back
+    /// over the live file, so a second load of the now-clean file makes no
+    /// further backup (previously the original was re-filtered, and
+    /// re-backed up, on every load).
+    #[test]
+    fn a_second_load_of_a_filtered_store_makes_no_further_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut bad = h("2", Colour::Blue, 3, 4);
+        bad.anchor.hash = "nope".into();
+        let good = h("3", Colour::Pink, 5, 6);
+        let mut file = HighlightsFile::default();
+        file.set(DOC_A.into(), vec![bad, good]);
+        file.save(dir.path()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        let first = HighlightsFile::load(dir.path()).unwrap();
+        assert_eq!(first.get(DOC_A).len(), 1);
+        assert_eq!(first.get(DOC_A)[0].id, id("3"));
+
+        // The live file now holds the filtered store only.
+        let live: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(live["files"][DOC_A].as_array().unwrap().len(), 1);
+
+        let second = HighlightsFile::load(dir.path()).unwrap();
+        assert_eq!(second.get(DOC_A).len(), 1);
+        assert_eq!(second.get(DOC_A)[0].id, id("3"));
+
+        // Exactly one backup (the original, from the first load), and the
+        // live file was not touched by the second load.
+        let backups = invalid_backups(dir.path());
+        assert_eq!(backups.len(), 1, "{backups:?}");
+        assert_eq!(std::fs::read_to_string(&backups[0]).unwrap(), original);
+    }
+
+    /// The live file is owner-only: the save's temp file is created 0600
+    /// on Unix, so even a permissive umask cannot widen it. A stale temp
+    /// from a crashed earlier save is replaced, not left behind.
+    #[cfg(unix)]
+    #[test]
+    fn save_creates_the_live_file_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let stale = dir.path().join(format!("{FILE_NAME}.tmp.{}", std::process::id()));
+        std::fs::write(&stale, "stale bytes").unwrap();
+
+        let mut file = HighlightsFile::default();
+        file.set(DOC_A.into(), vec![h("1", Colour::Yellow, 0, 1)]);
+        file.save(dir.path()).unwrap();
+
+        let live = dir.path().join(FILE_NAME);
+        assert_eq!(
+            std::fs::metadata(&live).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!stale.exists());
     }
 
     #[test]
@@ -1199,12 +1285,12 @@ mod tests {
         let loaded = HighlightsFile::load(dir.path()).unwrap();
         assert_eq!(loaded.get(DOC_A).len(), MAX_HIGHLIGHTS_PER_FILE);
 
-        // The live file is left intact with the un-truncated list.
+        // The live file is replaced by the truncated list.
         let live: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             live["files"][DOC_A].as_array().unwrap().len(),
-            MAX_HIGHLIGHTS_PER_FILE + 1
+            MAX_HIGHLIGHTS_PER_FILE
         );
 
         let backups = invalid_backups(dir.path());
@@ -1228,6 +1314,12 @@ mod tests {
         assert!(!loaded.files.contains_key("relative/doc.md"));
         assert_eq!(loaded.get(DOC_ABS).len(), 1);
         assert_eq!(loaded.get(DOC_ABS)[0].id, id("2"));
+
+        // The live file is replaced by the filtered store.
+        let live: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(live["files"].as_object().unwrap().contains_key(DOC_ABS));
+        assert!(!live["files"].as_object().unwrap().contains_key("relative/doc.md"));
 
         let backups = invalid_backups(dir.path());
         assert_eq!(backups.len(), 1, "{backups:?}");

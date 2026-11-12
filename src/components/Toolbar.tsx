@@ -102,6 +102,7 @@ export const Toolbar = memo(function Toolbar({ filePath, onOpenFile, onSplit, on
                 onClick={onToggleHighlights}
                 variant="ghost"
                 size="icon"
+                aria-label={highlightsOpen ? "Hide highlights" : "Show highlights"}
                 className={cn("relative h-7 w-7", highlightsOpen && "bg-accent")}
               >
                 <Highlighter className="h-3.5 w-3.5" />

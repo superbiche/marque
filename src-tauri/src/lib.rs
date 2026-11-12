@@ -25,13 +25,20 @@ use watcher::{hydrate_folder, hydrate_folders, SharedWatchers, Watchers};
 /// command.
 const HIGHLIGHTS_FLUSH_EVENT: &str = "highlights://flush-request";
 
-/// First-`CloseRequested`-only guard for the main window: the first close
-/// request is prevented so the frontend can flush (and then call
-/// `confirm_close`); a second request before the flush lands closes the
-/// window for real. The main window is created once per process (this app
-/// never creates a replacement one), so the guard is per process.
+/// Close-request state for the main window, shared with the frontend-ack
+/// flow through the `Arc` in managed state. `attempted` marks that a close
+/// has been intercepted (a second request before the ack passes through and
+/// closes for real); `acked` means the frontend received the flush request
+/// (suppressing the 2 s "frontend dead" fallback and starting the 30 s
+/// ceiling); `confirmed` means `confirm_close` arrived (flush landed);
+/// `cancelled` means `cancel_close` arrived (flush failed, stay open). The
+/// main window is created once per process (this app never creates a
+/// replacement one), so the guard is per process.
 struct CloseGuard {
     attempted: AtomicBool,
+    acked: AtomicBool,
+    confirmed: AtomicBool,
+    cancelled: AtomicBool,
 }
 
 /// Handle a new CLI target from either single-instance forwarding or macOS
@@ -91,11 +98,13 @@ pub fn run() {
         .on_menu_event(menu::handle_event)
         // Closing the main window (title-bar button, macOS Window menu):
         // the first request is intercepted so the frontend can flush
-        // in-flight highlight saves (it answers with `confirm_close`,
-        // which destroys the window). A second request before the flush
-        // lands — or one after the 2 s fallback timer expired — closes
-        // for real. The JS `onCloseRequested` API is deliberately not
-        // used: its close path calls `destroy()`, which needs the
+        // in-flight highlight saves. The frontend answers with
+        // `ack_close_request` (it is alive: a 30 s ceiling now governs and
+        // the 2 s fallback below is suppressed) and then `confirm_close`
+        // (flush landed: destroy) or `cancel_close` (flush failed: stay
+        // open). A second request before the ack lands closes for real.
+        // The JS `onCloseRequested` API is deliberately not used: its
+        // close path calls `destroy()`, which needs the
         // `core:window:allow-destroy` capability (a permission change).
         // The macOS menu's Quit item (⌘Q) is a custom item that routes
         // through this same flow (see `menu.rs`). Dock "Quit" and OS
@@ -107,23 +116,29 @@ pub fn run() {
             let tauri::WindowEvent::CloseRequested { api, .. } = event else {
                 return;
             };
-            let Some(guard) = window.app_handle().try_state::<CloseGuard>() else {
+            let Some(guard) = window.app_handle().try_state::<Arc<CloseGuard>>() else {
                 return;
             };
+            // A second close request before the first was acknowledged:
+            // pass through and close for real ("close without saving").
             if guard.attempted.swap(true, Ordering::SeqCst) {
                 return;
             }
             api.prevent_close();
             let _ = tauri::Emitter::emit(window, HIGHLIGHTS_FLUSH_EVENT, ());
-            // No confirmation from the frontend within 2 s (JS dead or the
-            // flush hung): close anyway. A plain OS thread avoids needing a
-            // tokio `time` dependency; `Window::destroy` is dispatcher-based
-            // and thread-safe. May race a late `confirm_close`; a second
-            // destroy is an error we ignore.
+            // The frontend acks as soon as it receives the flush request.
+            // If it never does (JS dead or the event undelivered), destroy
+            // after 2 s. A plain OS thread avoids needing a tokio `time`
+            // dependency; `Window::destroy` is dispatcher-based and
+            // thread-safe. Once the frontend has acked, the 30 s ceiling
+            // started by `ack_close_request` supersedes this fallback.
+            let guard = Arc::clone(&*guard);
             let window = window.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(2));
-                let _ = window.destroy();
+                if !guard.acked.load(Ordering::SeqCst) {
+                    let _ = window.destroy();
+                }
             });
         })
         .setup(move |app| {
@@ -147,9 +162,12 @@ pub fn run() {
             };
 
             app.manage(InitialTargetState(Mutex::new(initial_resolved)));
-            app.manage(CloseGuard {
+            app.manage(Arc::new(CloseGuard {
                 attempted: AtomicBool::new(false),
-            });
+                acked: AtomicBool::new(false),
+                confirmed: AtomicBool::new(false),
+                cancelled: AtomicBool::new(false),
+            }));
             app.manage(loaded_settings.status);
             app.manage(Arc::clone(&registry));
             app.manage(Arc::clone(&watchers));
@@ -192,7 +210,9 @@ pub fn run() {
             commands::save_highlights,
             commands::get_highlights_key,
             commands::list_highlighted_paths,
+            commands::ack_close_request,
             commands::confirm_close,
+            commands::cancel_close,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

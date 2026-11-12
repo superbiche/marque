@@ -1,9 +1,17 @@
 import * as React from "react";
 import { HIGHLIGHT_COLOURS, MAX_NOTE_LENGTH, type HighlightColour } from "@/lib/highlights";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
 
 const FLASH_MS = 1200;
+
+/** True for an element the user can type into (a form field or a
+ *  contenteditable region). */
+function isEditableTarget(el: HTMLElement): boolean {
+  const tag = el.tagName?.toLowerCase();
+  return tag === "input" || tag === "textarea" || tag === "select" || el.isContentEditable;
+}
 
 export interface HighlightPopoverState {
   /** Viewport position of the bottom-centre of the selection. */
@@ -14,6 +22,8 @@ export interface HighlightPopoverState {
 interface Props {
   state: HighlightPopoverState | null;
   activeColour: HighlightColour;
+  /** The article to return focus to when the popover closes (a11y). */
+  articleRef?: React.RefObject<HTMLElement | null>;
   /**
    * Apply a highlight in the given colour. If `note` is provided the
    * highlight is created with the annotation in one step.
@@ -36,6 +46,7 @@ interface Props {
 export function HighlightPopover({
   state,
   activeColour,
+  articleRef,
   onApply,
   onCopyForAgent,
   onDismiss,
@@ -76,9 +87,33 @@ export function HighlightPopover({
     if (annotating) inputRef.current?.focus();
   }, [annotating]);
 
+  // Move focus into the popover on open and, on a close where focus has
+  // "dropped" (to body), return it to the article. The popover is non-modal —
+  // focus is never trapped — and we never steal a focus the user just placed
+  // elsewhere by clicking out.
+  const prevOpenRef = React.useRef(false);
+  React.useEffect(() => {
+    const open = state !== null;
+    if (open) {
+      ref.current?.focus();
+      prevOpenRef.current = true;
+    } else if (prevOpenRef.current) {
+      prevOpenRef.current = false;
+      const active = document.activeElement;
+      const noRealFocus =
+        active == null || active === document.body || active === document.documentElement;
+      if (noRealFocus) articleRef?.current?.focus();
+    }
+  }, [state, articleRef]);
+
   React.useEffect(() => {
     if (!state) return;
     const onKey = (e: KeyboardEvent) => {
+      // A global window listener: don't steal a keystroke typed into an
+      // editable control that lives *outside* this popover (the popover's own
+      // input is inside `ref`, so it is handled as before).
+      const target = e.target as HTMLElement | null;
+      if (target && !ref.current?.contains(target) && isEditableTarget(target)) return;
       if (e.key === "Escape") {
         e.preventDefault();
         if (annotating) {
@@ -114,6 +149,7 @@ export function HighlightPopover({
   return (
     <div
       ref={ref}
+      tabIndex={-1}
       role="toolbar"
       aria-label="Highlight"
       className="fixed z-50 flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"
@@ -141,36 +177,36 @@ export function HighlightPopover({
             />
           ))}
           <div className="mx-1 h-4 w-px bg-border" />
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => setAnnotating(true)}
-            className="rounded-sm px-2 py-1 text-xs hover:bg-accent"
             title="Highlight in active colour and attach a note"
           >
             Annotate
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => {
               void (async () => {
                 const ok = await onCopyForAgent();
                 if (ok) flashCopy();
               })();
             }}
-            className={cn(
-              "flex items-center gap-1 rounded-sm px-2 py-1 text-xs hover:bg-accent",
-              copyFlashing && "text-emerald-600 dark:text-emerald-400",
-            )}
+            className={cn(copyFlashing && "text-emerald-600 dark:text-emerald-400")}
             title="Copy this passage as an agent-ready block"
           >
             {copyFlashing ? (
               <>
-                <Check className="h-3 w-3" /> Copied
+                <Check className="size-3" /> Copied
               </>
             ) : (
               "Copy"
             )}
-          </button>
+          </Button>
         </>
       ) : (
         <div className="flex flex-col gap-1">
@@ -196,14 +232,15 @@ export function HighlightPopover({
             placeholder="Note for this highlight…"
             className="h-6 w-56 rounded-sm border bg-background px-1.5 text-xs outline-none focus:ring-1 focus:ring-ring"
           />
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => onApply(activeColour, note.trim() || undefined)}
-            className="rounded-sm px-2 py-1 text-xs hover:bg-accent"
             title="Save annotation (Enter)"
           >
             Save
-          </button>
+          </Button>
           </div>
           {note.length >= MAX_NOTE_LENGTH && (
             <div className="text-[10px] text-muted-foreground">

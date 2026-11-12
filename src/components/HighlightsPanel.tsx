@@ -24,6 +24,8 @@ interface CopyButtonProps {
   className?: string;
   /** When true, render the "Copy" / "Copied" label inline next to the icon. */
   withLabel?: boolean;
+  /** When true, the button is inert (nothing to copy) and dimmed. */
+  disabled?: boolean;
 }
 
 /**
@@ -37,6 +39,7 @@ function CopyButton({
   iconClassName = "h-3 w-3",
   className,
   withLabel,
+  disabled,
 }: CopyButtonProps) {
   const [flashing, setFlashing] = React.useState(false);
   const timerRef = React.useRef<number | null>(null);
@@ -50,7 +53,9 @@ function CopyButton({
     <button
       type="button"
       title={title}
+      disabled={disabled}
       onClick={() => {
+        if (disabled) return;
         void (async () => {
           const ok = await copyText(text, successMessage);
           if (!ok) return;
@@ -65,6 +70,7 @@ function CopyButton({
       className={cn(
         "flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-muted-foreground transition hover:bg-accent hover:text-foreground",
         flashing && "text-emerald-600 dark:text-emerald-400 hover:text-emerald-600",
+        disabled && "pointer-events-none opacity-40 hover:bg-transparent",
         className,
       )}
     >
@@ -178,6 +184,16 @@ export function HighlightsPanel({
 }: Props) {
   const [filter, setFilter] = React.useState<HighlightColour | null>(null);
   const [editingId, setEditingId] = React.useState<string | null>(null);
+
+  // The colour filter and any open note editor belong to the document they
+  // were set on. Switching documents resets both (item 15): a filter that
+  // happened to match the previous document would otherwise silently hide
+  // this one's rows, and an editor would commit a note to a highlight in the
+  // document we just left.
+  React.useEffect(() => {
+    setFilter(null);
+    setEditingId(null);
+  }, [filePath]);
 
   // Rows in document order, exactly as the Viewer's resolution published
   // them: `passage`/`section`/`lineRange` are the resolved values (orphan
@@ -318,6 +334,10 @@ export function HighlightsPanel({
             title={filter ? `Copy ${filter} list` : "Copy visible lists"}
             withLabel={false}
             className="ml-auto"
+            // A colour filter can leave the visible list empty (notably after
+            // a document switch the filter no longer matches); a disabled
+            // Copy beats copying nothing (item 15).
+            disabled={visible.length === 0}
           />
         )}
       </div>
@@ -411,7 +431,7 @@ export function HighlightsPanel({
                               <div className="whitespace-pre-wrap">{h.note}</div>
                             </div>
                           ) : null}
-                          <div className="mt-1 flex justify-end gap-1 opacity-0 transition group-hover:opacity-100">
+                          <div className="mt-1 flex justify-end gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
                             {!isEditing && (
                               <button
                                 type="button"
@@ -475,7 +495,7 @@ export function HighlightsPanel({
                             <div className="whitespace-pre-wrap">{h.note}</div>
                           </div>
                         ) : null}
-                        <div className="mt-1 flex justify-end gap-1 opacity-0 transition group-hover:opacity-100">
+                        <div className="mt-1 flex justify-end gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
                           <CopyButton
                             text={formatExportItem(toExportItem(e))}
                             title="Copy item"

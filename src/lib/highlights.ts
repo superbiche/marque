@@ -84,12 +84,43 @@ export function emptyFile(): HighlightsFile {
   return { version: 2, files: {} };
 }
 
-/** Generate a UUID-ish id without pulling in a dep. */
+/**
+ * Turn 16 raw bytes into a lowercase v4 UUID string, setting the version-4
+ * and RFC-4122 variant (10xx) bits. Exported so the `getRandomValues`
+ * fallback path in `newHighlightId` can be tested with a controlled byte
+ * array (the reference test env has `crypto.randomUUID`, which short-circuits
+ * the fallback).
+ */
+export function v4UuidFromBytes(b: Uint8Array): string {
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // RFC 4122 variant (10xx)
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0"));
+  return `${h[0]}${h[1]}${h[2]}${h[3]}-${h[4]}${h[5]}-${h[6]}${h[7]}-${h[8]}${h[9]}-${h[10]}${h[11]}${h[12]}${h[13]}${h[14]}${h[15]}`;
+}
+
+/**
+ * Generate a v4 UUID. Uses `crypto.randomUUID` when available; otherwise
+ * builds one from `crypto.getRandomValues` (version-4 and RFC-4122 variant
+ * bits set). Never `Math.random` — a predictable id could collide across
+ * installs, and an id only needs to be unique, not secret.
+ */
 export function newHighlightId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
-    return crypto.randomUUID();
+  // Read through a local so the type-checker can't narrow the global `crypto`
+  // to `never` across the randomUUID branch (it happens with a bare
+  // `in`-check on the global).
+  const c =
+    typeof globalThis !== "undefined" && "crypto" in globalThis
+      ? globalThis.crypto
+      : undefined;
+  if (c) {
+    if (typeof c.randomUUID === "function") {
+      return c.randomUUID();
+    }
+    const bytes = new Uint8Array(16);
+    c.getRandomValues(bytes);
+    return v4UuidFromBytes(bytes);
   }
-  return `h_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  throw new Error("WebCrypto is unavailable; cannot generate a highlight id");
 }
 
 /**
@@ -116,24 +147,27 @@ export function normalizeText(s: string): string {
 // highlights.json. Because the key is unknown to whoever authors a document,
 // a forged passage cannot be made to match a stored hash.
 //
-// **Why BigInt rather than two 32-bit halves:** the SipHash round mixes with
-// 64-bit addition (carries span the full word) and 64-bit rotates. A
-// two-32-bit-halves implementation has to emulate the cross-half carry and
-// rotate manually at every step — exactly the place a carry/rotate off-by-one
-// corrupts the digest in a way that is trivial to miss in one direction and
-// hard to catch. Native `BigInt` gives us exact 64-bit arithmetic for free and
-// the port below is a line-for-line transcription of the reference
-// `siphasher-1.0.3` `compress!` macro, so correctness reduces to matching the
-// reference vectors (checked in `highlights.test.ts` against all 64 entries of
-// `test_siphash_2_4` plus the four spec values). The cost is a handful of
-// allocations per round; a passage is a few hundred bytes, so one hash is well
-// under a millisecond, and the (b)/(c) relocation scan re-hashes at most
-// O(n/8) 8-byte windows — measured at ~32 ms for 2000 such hashes of 50-byte
-// windows, i.e. negligible for a viewer that hashes a handful of passages per
-// render.
+// **Why two 32-bit halves rather than `BigInt`:** the round mixes with 64-bit
+// addition (a carry across the two halves) and 64-bit left rotates. Both are
+// done here in native 32-bit integers (`u64Add` carries, `u64Rotl` handles the
+// three rotate cases n < 32, n = 32, n > 32) with `>>> 0`, so a hash allocates
+// nothing — which is what the (b)/(c) relocation scan hammers, re-hashing a
+// sliding window many times per pass. The port is checked against all 64
+// entries of `siphasher-1.0.3`'s `test_siphash_2_4` plus the four spec values
+// in `highlights.test.ts`, so a carry/rotate off-by-one fails the suite.
+//
+// **Relocation cost:** the (b)/(c) scan slides a window of the stored length
+// `L` across a block (or, in (c), every block) and re-hashes at each position,
+// so the worst case is ≈ O(n·L) SipHash input bytes, where `n` is the
+// document's total normalized length and `L ≤ MAX_PASSAGE_LENGTH` (100,000).
+// A passage is in practice a few hundred bytes and the scan stops at the
+// first hash match, so relocating a few-hundred-byte passage across a
+// few-thousand-byte block is well under a millisecond; the worst case (a
+// 100 kB passage sliding across a large block) is bounded by that product and
+// is what the relocation cache below stops re-paying on unchanged blocks.
 //
 // **Output byte order:** the 64-bit digest is returned as 16 lowercase hex
-// digits, **MSB-first** (`out.toString(16)`). The `siphasher-1.0.3` reference
+// digits, **MSB-first** (high word, then low word). The `siphasher-1.0.3` reference
 // table stores each digest as 8 *little-endian* bytes; the canonical hex used
 // here is those bytes read MSB-first, i.e. the table entry reversed.
 //
@@ -141,25 +175,66 @@ export function normalizeText(s: string): string {
 // `k1` from bytes 8..15.
 // ---------------------------------------------------------------------------
 
-const SIPHASH_MASK = (1n << 64n) - 1n;
+/** A 64-bit value as `[hi, lo]`, each a 32-bit unsigned (`>>> 0`). */
+type U64 = [hi: number, lo: number];
 
-/** SipHash left-rotate of a 64-bit word. */
-function rotl(x: bigint, n: bigint): bigint {
-  return ((x << n) | (x >> (64n - n))) & SIPHASH_MASK;
+/** Little-endian 8 bytes at `off` -> `[hi, lo]` (bytes `off..off+3` are `lo`). */
+function bytesToU64LE(bytes: Uint8Array, off: number): U64 {
+  let lo = 0;
+  let hi = 0;
+  for (let i = 0; i < 4; i++) lo |= bytes[off + i] << (8 * i);
+  for (let i = 0; i < 4; i++) hi |= bytes[off + 4 + i] << (8 * i);
+  return [hi >>> 0, lo >>> 0];
 }
 
+/** 64-bit addition, carrying from the low half into the high half. */
+function u64Add(a: U64, b: U64): U64 {
+  const lo = (a[1] + b[1]) >>> 0;
+  const carry = lo < a[1] ? 1 : 0;
+  return [(a[0] + b[0] + carry) >>> 0, lo];
+}
+
+/** 64-bit xor, half-wise. */
+function u64Xor(a: U64, b: U64): U64 {
+  return [(a[0] ^ b[0]) >>> 0, (a[1] ^ b[1]) >>> 0];
+}
+
+/** 64-bit left-rotate by `n` (mod 64), across the two halves. */
+function u64Rotl(hi: number, lo: number, n: number): U64 {
+  n = ((n % 64) + 64) % 64;
+  if (n === 0) return [hi >>> 0, lo >>> 0];
+  if (n === 32) return [lo >>> 0, hi >>> 0];
+  if (n < 32) {
+    return [
+      ((hi << n) | (lo >>> (32 - n))) >>> 0,
+      ((lo << n) | (hi >>> (32 - n))) >>> 0,
+    ];
+  }
+  const m = n - 32;
+  return [
+    ((lo << m) | (hi >>> (32 - m))) >>> 0,
+    ((hi << m) | (lo >>> (32 - m))) >>> 0,
+  ];
+}
+
+/** The four SipHash-2-4 constants, split into `[hi, lo]` words. */
+const SIPHASH_C0: U64 = [0x736f6d65, 0x70736575];
+const SIPHASH_C1: U64 = [0x646f7261, 0x6e646f6d];
+const SIPHASH_C2: U64 = [0x6c796765, 0x6e657261];
+const SIPHASH_C3: U64 = [0x74656462, 0x79746573];
+
 /** One SipHash round (the `compress!` macro body from siphasher-1.0.3). */
-function sipRound(v0: bigint, v1: bigint, v2: bigint, v3: bigint): [bigint, bigint, bigint, bigint] {
-  v0 = (v0 + v1) & SIPHASH_MASK;
-  v1 = rotl(v1, 13n) ^ v0;
-  v0 = rotl(v0, 32n);
-  v2 = (v2 + v3) & SIPHASH_MASK;
-  v3 = rotl(v3, 16n) ^ v2;
-  v0 = (v0 + v3) & SIPHASH_MASK;
-  v3 = rotl(v3, 21n) ^ v0;
-  v2 = (v2 + v1) & SIPHASH_MASK;
-  v1 = rotl(v1, 17n) ^ v2;
-  v2 = rotl(v2, 32n);
+function sipRound(v0: U64, v1: U64, v2: U64, v3: U64): [U64, U64, U64, U64] {
+  v0 = u64Add(v0, v1);
+  v1 = u64Xor(u64Rotl(v1[0], v1[1], 13), v0);
+  v0 = u64Rotl(v0[0], v0[1], 32);
+  v2 = u64Add(v2, v3);
+  v3 = u64Xor(u64Rotl(v3[0], v3[1], 16), v2);
+  v0 = u64Add(v0, v3);
+  v3 = u64Xor(u64Rotl(v3[0], v3[1], 21), v0);
+  v2 = u64Add(v2, v1);
+  v1 = u64Xor(u64Rotl(v1[0], v1[1], 17), v2);
+  v2 = u64Rotl(v2[0], v2[1], 32);
   return [v0, v1, v2, v3];
 }
 
@@ -169,40 +244,41 @@ function sipRound(v0: bigint, v1: bigint, v2: bigint, v3: bigint): [bigint, bigi
  * for the reference source and the output byte-order convention.
  */
 export function siphash24Hex(data: Uint8Array, key: Uint8Array): string {
-  let k0 = 0n;
-  let k1 = 0n;
-  for (let i = 0; i < 8; i++) {
-    k0 |= BigInt(key[i]) << BigInt(8 * i);
-    k1 |= BigInt(key[8 + i]) << BigInt(8 * i);
-  }
-  let v0 = k0 ^ 0x736f6d6570736575n;
-  let v1 = k1 ^ 0x646f72616e646f6dn;
-  let v2 = k0 ^ 0x6c7967656e657261n;
-  let v3 = k1 ^ 0x7465646279746573n;
+  const k0 = bytesToU64LE(key, 0);
+  const k1 = bytesToU64LE(key, 8);
+  let v0 = u64Xor(k0, SIPHASH_C0);
+  let v1 = u64Xor(k1, SIPHASH_C1);
+  let v2 = u64Xor(k0, SIPHASH_C2);
+  let v3 = u64Xor(k1, SIPHASH_C3);
 
   const len = data.length;
   const full = (len >> 3) << 3;
   for (let i = 0; i < full; i += 8) {
-    let m = 0n;
-    for (let j = 0; j < 8; j++) m |= BigInt(data[i + j]) << BigInt(8 * j);
-    v3 = v3 ^ m;
+    const m = bytesToU64LE(data, i);
+    v3 = u64Xor(v3, m);
     [v0, v1, v2, v3] = sipRound(v0, v1, v2, v3);
     [v0, v1, v2, v3] = sipRound(v0, v1, v2, v3);
-    v0 = v0 ^ m;
+    v0 = u64Xor(v0, m);
   }
-  // Final block: remaining bytes plus the total length (mod 2^8) in the top byte.
-  let b = ((BigInt(len) & 0xffn) << 56n) & SIPHASH_MASK;
-  for (let j = 0; j < len - full; j++) {
-    b |= BigInt(data[full + j]) << BigInt(8 * j);
+  // Final block: the remaining bytes (little-endian in the low half) plus the
+  // total length (mod 2^8) in the top byte.
+  let bHi = ((len & 0xff) << 24) >>> 0;
+  let bLo = 0;
+  const rem = len - full;
+  for (let j = 0; j < rem; j++) {
+    const byte = data[full + j];
+    if (j < 4) bLo |= byte << (8 * j);
+    else bHi |= byte << (8 * (j - 4));
   }
-  v3 = v3 ^ b;
+  const b: U64 = [bHi >>> 0, bLo >>> 0];
+  v3 = u64Xor(v3, b);
   [v0, v1, v2, v3] = sipRound(v0, v1, v2, v3);
   [v0, v1, v2, v3] = sipRound(v0, v1, v2, v3);
-  v0 = v0 ^ b;
-  v2 = v2 ^ 0xffn;
+  v0 = u64Xor(v0, b);
+  v2 = u64Xor(v2, [0, 0xff]);
   for (let i = 0; i < 4; i++) [v0, v1, v2, v3] = sipRound(v0, v1, v2, v3);
-  const out = (v0 ^ v1 ^ v2 ^ v3) & SIPHASH_MASK;
-  return out.toString(16).padStart(16, "0");
+  const out = u64Xor(u64Xor(v0, v1), u64Xor(v2, v3));
+  return out[0].toString(16).padStart(8, "0") + out[1].toString(16).padStart(8, "0");
 }
 
 /** UTF-8-encode a string to a byte array (for hashing its normalized passage). */
@@ -675,33 +751,150 @@ export function collectBlocks(container: HTMLElement): MappedBlock[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Relocation window cache (item 8).
+//
+// `findWindow`'s sliding scan is the expensive step (≈ O(blockLen · L) SipHash
+// bytes). Re-resolving an unchanged container (a re-render, a re-select, a
+// re-apply) would re-scan every block for every highlight for nothing. This
+// module-level cache memoizes the scan result per (block normalized text,
+// anchor, key) so an unchanged block is not re-scanned. It is a pure function
+// of its key, in-memory only, never persisted, and self-caps at
+// MAX_WINDOW_CACHE entries (the oldest is dropped on overflow).
+//
+// The key digests the block's normalized text (three FNV-32s, 96 bits) plus
+// its length, the anchor's hash and length, and a per-key identity (an integer
+// in a `WeakMap`, so the cache is bound to *this* key and a different key —
+// which changes every stored hash — misses cleanly). A "found" entry is
+// re-verified with a single window hash before use (guards a digest
+// collision); a "not found" entry is trusted as computed (step (a) already
+// ran).
+// ---------------------------------------------------------------------------
+
+/** A keyed 64-bit hash: `data` -> 16-hex digest. `siphash24Hex` is the real one. */
+type HashFn = (data: Uint8Array, key: Uint8Array) => string;
+
+const MAX_WINDOW_CACHE = 4096;
+const windowCache = new Map<string, number | null>();
+// A stable integer per key object, so a cache entry is bound to the key that
+// produced it. A WeakMap lets the identity die with the key.
+const keyIdentity = new WeakMap<Uint8Array, number>();
+let keyIdentityCounter = 0;
+// Test support: a count of window hashes actually computed, so a test can
+// prove a second resolve of an unchanged container is a cache hit.
+let __hashCalls = 0;
+
+/** Test hook: reset the hash-call counter. */
+export function __resetRelocationStats(): void {
+  __hashCalls = 0;
+}
+/** Test hook: window hashes computed since the last reset. */
+export function __hashCallCount(): number {
+  return __hashCalls;
+}
+/** Test hook: clear the relocation window cache (and the hash counter). */
+export function __resetWindowCache(): void {
+  windowCache.clear();
+  __hashCalls = 0;
+}
+
+function keyIdOf(key: Uint8Array): number {
+  let id = keyIdentity.get(key);
+  if (id === undefined) {
+    id = keyIdentityCounter++;
+    keyIdentity.set(key, id);
+  }
+  return id;
+}
+
+/** FNV-1a 32 over a string, from a caller-supplied seed. */
+function fnv32(s: string, seed: number): number {
+  let h = seed >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** 96-bit (three FNV-32) digest of a string, as a 24-hex-char tag. */
+function textDigest(s: string): string {
+  return (
+    fnv32(s, 0x811c9dc5).toString(16).padStart(8, "0") +
+    fnv32(s, 0x9dc5811c).toString(16).padStart(8, "0") +
+    fnv32(s, 0x12345678).toString(16).padStart(8, "0")
+  );
+}
+
+function windowCacheKey(text: string, anchor: HighlightAnchor, key: Uint8Array): string {
+  return `${textDigest(text)}:${text.length}:${anchor.hash}:${anchor.length}:${keyIdOf(key)}`;
+}
+
 /**
  * Find a window of `anchor.length` matching `anchor.hash` in a block's
  * normalized text. Returns the window start, or null. Step (a) checks the
- * stored offset first; then every window, keeping the match closest to the
- * stored offset (first one wins on a tie).
+ * stored offset first (always a single hash); then, for the real keyed hash,
+ * consults the relocation cache before any sliding scan. The scan keeps the
+ * match closest to the stored offset (first one wins on a tie).
  */
-function findWindow(text: string, anchor: HighlightAnchor, key: Uint8Array): number | null {
+function findWindow(
+  text: string,
+  anchor: HighlightAnchor,
+  key: Uint8Array,
+  hash: HashFn = siphash24Hex,
+): number | null {
   if (anchor.length === 0 || text.length < anchor.length) return null;
   // `text` is already NFC + collapsed (the block's canonical text), so each
   // window is hashed directly without a redundant re-normalization.
-  if (
-    anchor.startOffset + anchor.length <= text.length &&
-    siphash24Hex(utf8(text.slice(anchor.startOffset, anchor.startOffset + anchor.length)), key) ===
-      anchor.hash
-  ) {
-    return anchor.startOffset;
+  const windowHash = (start: number, len: number): string => {
+    __hashCalls++;
+    return hash(utf8(text.slice(start, start + len)), key);
+  };
+
+  // Step (a): the stored offset, always checked.
+  if (anchor.startOffset + anchor.length <= text.length) {
+    if (windowHash(anchor.startOffset, anchor.length) === anchor.hash) {
+      return anchor.startOffset;
+    }
   }
+
+  // Only the real keyed hash reads/writes the shared cache (an injected
+  // non-siphash hash has its own results and must not).
+  const useCache = hash === siphash24Hex;
+  const cacheKey = useCache ? windowCacheKey(text, anchor, key) : null;
+  if (useCache) {
+    const cached = windowCache.get(cacheKey!);
+    if (cached !== undefined) {
+      if (cached === null) return null; // not found: trust the prior scan
+      // Re-verify a found position with a single window hash (collision guard).
+      if (
+        cached + anchor.length <= text.length &&
+        windowHash(cached, anchor.length) === anchor.hash
+      ) {
+        return cached;
+      }
+      // Collision or text changed since: fall through and re-scan.
+    }
+  }
+
+  // Full scan: slide a window of the stored length, keep the match closest to
+  // the stored offset (first one wins on a tie).
   let best: number | null = null;
   for (let i = 0; i + anchor.length <= text.length; i++) {
-    if (siphash24Hex(utf8(text.slice(i, i + anchor.length)), key) !== anchor.hash) continue;
-    if (
-      best === null ||
-      Math.abs(i - anchor.startOffset) < Math.abs(best - anchor.startOffset)
-    ) {
+    if (windowHash(i, anchor.length) !== anchor.hash) continue;
+    if (best === null || Math.abs(i - anchor.startOffset) < Math.abs(best - anchor.startOffset)) {
       best = i;
     }
   }
+
+  if (useCache) {
+    if (windowCache.size >= MAX_WINDOW_CACHE) {
+      const first = windowCache.keys().next().value;
+      if (first !== undefined) windowCache.delete(first);
+    }
+    windowCache.set(cacheKey!, best);
+  }
+
   return best;
 }
 
@@ -750,6 +943,7 @@ export function resolveAnchors(
   container: HTMLElement,
   highlights: Highlight[],
   key: Uint8Array,
+  hash: HashFn = siphash24Hex,
 ): Resolution {
   const blocks = collectBlocks(container);
   const resolved: ResolvedHighlight[] = [];
@@ -759,13 +953,13 @@ export function resolveAnchors(
     const target = blockForHighlight(blocks, h);
     let hit: { block: MappedBlock; startOffset: number } | null = null;
     if (target) {
-      const off = findWindow(target.text, h.anchor, key);
+      const off = findWindow(target.text, h.anchor, key, hash);
       if (off !== null) hit = { block: target, startOffset: off };
     }
     if (!hit) {
       for (const block of blocks) {
         if (block === target) continue;
-        const off = findWindow(block.text, h.anchor, key);
+        const off = findWindow(block.text, h.anchor, key, hash);
         if (off !== null) {
           hit = { block, startOffset: off };
           break;
@@ -793,6 +987,11 @@ export function resolveAnchors(
 /**
  * Nearest heading above a line range, from the current DOM (used for
  * orphaned items, whose block can no longer be resolved). "" if none.
+ *
+ * Queries the heading elements that carry a `data-source-map` directly,
+ * instead of `collectBlocks` (which builds a text map for *every* block —
+ * wasted here, since we only need a heading's line range, which is in the
+ * attribute).
  */
 export function sectionHeadingForRange(
   container: HTMLElement,
@@ -801,11 +1000,16 @@ export function sectionHeadingForRange(
 ): string {
   let best = "";
   let bestEnd = -1;
-  for (const block of collectBlocks(container)) {
-    const el = block.element;
-    if (!/^H[1-6]$/.test(el.tagName)) continue;
-    if (block.end <= startLine && block.end > bestEnd) {
-      bestEnd = block.end;
+  const headings = container.querySelectorAll<HTMLElement>(
+    "h1[data-source-map], h2[data-source-map], h3[data-source-map], h4[data-source-map], h5[data-source-map], h6[data-source-map]",
+  );
+  for (const el of Array.from(headings)) {
+    const raw = el.getAttribute("data-source-map");
+    if (!raw) continue;
+    const [, end] = raw.split(",").map(Number);
+    if (!Number.isFinite(end)) continue;
+    if (end <= startLine && end > bestEnd) {
+      bestEnd = end;
       best = (el.textContent || "").trim().replace(/^#\s*/, "");
     }
   }

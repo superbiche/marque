@@ -66,10 +66,13 @@ interface Ctx {
   /** Restore the last deleted highlight (5-second window). */
   undoDelete: () => void;
   /**
-   * Persist every path not yet saved and wait for every save queue to drain.
-   * Called before a confirmed window close and, fire-and-forget, on unmount.
+   * Persist every path not yet saved and wait for every save queue to drain,
+   * re-checking until every path is on disk or a pass makes no progress.
+   * Resolves `{ ok }`: `true` when everything was saved, `false` when a save
+   * kept failing (the window close is then cancelled, not forced). Called on
+   * a window-close flush request and, fire-and-forget, on unmount.
    */
-  flush: () => Promise<void>;
+  flush: () => Promise<{ ok: boolean }>;
 }
 
 const HighlightsContext = React.createContext<Ctx | null>(null);
@@ -139,26 +142,51 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     localStorage.setItem(PANEL_OPEN_KEY, panelOpen ? "true" : "false");
   }, [panelOpen]);
 
-  // Load the per-installation key once (Tauri only). Anchoring/relocation are
-  // gated on this, so it must resolve before any highlight can be created or
-  // resolved; a failure leaves it null and anchoring stays disabled.
-  React.useEffect(() => {
+  // Load the per-installation key (Tauri only). Anchoring/relocation are
+  // gated on this, so it must resolve before a highlight can be anchored; a
+  // failed read (a rejection, or a value that is not 32 hex digits) leaves it
+  // null and anchoring stays disabled. `fetchKey` is self-guarded: it only
+  // actually calls `getHighlightsKey` while the key is not yet available and
+  // no read is in flight, so it is cheap and idempotent. It is called once on
+  // mount and retried on every `loadFile`, so a transient failure — or a key
+  // created after first launch — recovers without a restart. A failure is
+  // reported at most once per streak (reset on a successful read), mirroring
+  // the save-failure notification pattern above.
+  const keyAvailableRef = React.useRef(false);
+  const keyInFlightRef = React.useRef(false);
+  const keyNotifiedRef = React.useRef(false);
+  const fetchKey = React.useCallback(() => {
     if (!inTauri()) return;
-    let cancelled = false;
+    if (keyAvailableRef.current || keyInFlightRef.current) return;
+    keyInFlightRef.current = true;
     tauri
       .getHighlightsKey()
       .then((hex) => {
-        if (cancelled) return;
         const key = hexToBytes16(hex);
-        if (key) setHighlightsKey(key);
+        if (key) {
+          keyAvailableRef.current = true;
+          keyNotifiedRef.current = false;
+          setHighlightsKey(key);
+        } else if (!keyNotifiedRef.current) {
+          keyNotifiedRef.current = true;
+          notifyApp("Highlights are unavailable: the highlights key could not be read.");
+        }
       })
       .catch((err) => {
-        if (!cancelled) console.error("failed to load the highlights key", err);
+        if (!keyNotifiedRef.current) {
+          keyNotifiedRef.current = true;
+          notifyApp("Highlights are unavailable: the highlights key could not be read.");
+          console.error("failed to load the highlights key", err);
+        }
+      })
+      .finally(() => {
+        keyInFlightRef.current = false;
       });
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  React.useEffect(() => {
+    fetchKey();
+  }, [fetchKey]);
 
   // --- Saving: one save queue per path ---------------------------------
   //
@@ -226,14 +254,29 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     [writerFor, enqueueSave],
   );
 
-  const flush = React.useCallback(async (): Promise<void> => {
-    // Queue one more save behind every path that is not yet persisted (this
-    // also retries failed ones), then wait for every queue to drain.
-    const tails: Promise<void>[] = [];
-    for (const [path, w] of writersRef.current) {
-      tails.push(w.sent < w.gen ? enqueueSave(path) : w.tail);
+  const flush = React.useCallback(async (): Promise<{ ok: boolean }> => {
+    // Queue one save behind every path that is not yet persisted (this also
+    // retries failed ones) and wait for every queue to drain. Then re-check:
+    // a path can be edited while we wait (bumping its `gen`), or a save can
+    // fail, so we loop until every path has `sent === gen` (ok) or a whole
+    // pass makes no progress (ok:false — a save that keeps failing). The
+    // iteration cap is a defensive bound for a pathological stream of edits
+    // during the flush; in practice a close means no new edits arrive.
+    for (let pass = 0; ; pass++) {
+      const before = new Map<string, number>();
+      const tails: Promise<void>[] = [];
+      for (const [path, w] of writersRef.current) {
+        before.set(path, w.sent);
+        tails.push(w.sent < w.gen ? enqueueSave(path) : w.tail);
+      }
+      await Promise.all(tails);
+      const allSent = [...writersRef.current.values()].every((w) => w.sent === w.gen);
+      if (allSent) return { ok: true };
+      const progress = [...writersRef.current.entries()].some(
+        ([path, w]) => w.sent > (before.get(path) ?? 0),
+      );
+      if (!progress || pass > 16) return { ok: false };
     }
-    await Promise.all(tails);
   }, [enqueueSave]);
 
   const flushRef = React.useRef(flush);
@@ -242,6 +285,10 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // --- Loading (F3) ----------------------------------------------------
 
   const loadFile = React.useCallback((path: string) => {
+    // Retry the per-installation key if it is still unavailable (it gates
+    // anchoring). `fetchKey` is self-guarded — a no-op once the key has
+    // landed — so this costs nothing on the common path.
+    fetchKey();
     const status = loadStatusRef.current.get(path);
     // Idempotent while loaded or already in flight; re-fetch from
     // "unloaded" or a previously-"failed" read (the retry path).
@@ -266,7 +313,7 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
         notifyApp(`Couldn't load highlights for ${basenameOf(path)}. They'll be retried when you open it again.`);
         console.error("failed to load highlights", err);
       });
-  }, [commit]);
+  }, [commit, fetchKey]);
 
   const getLoadStatus = React.useCallback(
     (path: string): HighlightLoadStatus => loadStatusRef.current.get(path) ?? "unloaded",
@@ -345,6 +392,18 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     if (!lastDeleted) return;
     const { path, highlight } = lastDeleted;
     if (!isMutable(path)) return;
+    // Restoring a deleted highlight is an addition: it must not push the
+    // file past its limit (a new highlight added while the undo window ran
+    // can fill the last slot). Refuse with the same notification as
+    // `addHighlight` and keep `lastDeleted` (and its timer), so the user
+    // can retry after the blocking highlight is removed.
+    const list = byFileRef.current[path] ?? [];
+    if (list.length >= MAX_HIGHLIGHTS_PER_FILE) {
+      notifyApp(
+        `Can't add more highlights to ${basenameOf(path)} (the ${MAX_HIGHLIGHTS_PER_FILE}-per-file limit is reached).`,
+      );
+      return;
+    }
     const restored: Highlight = { ...highlight, updatedAt: new Date().toISOString() };
     commit({ ...byFileRef.current, [path]: [...(byFileRef.current[path] ?? []), restored] });
     setLastDeleted(null);
@@ -367,9 +426,12 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     };
   }, []);
 
-  // Intercept the main window's first close request (Rust emits this after
-  // `api.prevent_close()` and before its 2-second fallback destroy). Await the
-  // flush, then let the close through. A failed flush must not trap the close.
+  // Intercept the main window's first close request. Rust emits this right
+  // after `api.prevent_close()`. We acknowledge it immediately (so Rust drops
+  // its 2-second "frontend dead" fallback and starts a 30-second ceiling),
+  // then flush: on success we confirm the close (Rust destroys the window);
+  // on failure we cancel it (the window stays open; `attempted` stays set on
+  // Rust, so closing again closes for real) and tell the user to close again.
   React.useEffect(() => {
     if (!inTauri()) return;
     let unlisten: UnlistenFn | null = null;
@@ -378,14 +440,24 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
       if (disposed) return;
       void (async () => {
         try {
-          await flushRef.current?.();
+          await tauri.ackCloseRequest();
         } catch {
-          // a failed flush must not block the close
+          // the ack failed: Rust's 2-second fallback will destroy the window
         }
-        try {
-          await tauri.confirmClose();
-        } catch {
-          // the Rust 2s fallback destroys the window either way
+        const { ok } = (await flushRef.current?.()) ?? { ok: false };
+        if (ok) {
+          try {
+            await tauri.confirmClose();
+          } catch {
+            // the 30-second ceiling destroys the window either way
+          }
+        } else {
+          try {
+            await tauri.cancelClose();
+          } catch {
+            // the 30-second ceiling destroys the window either way
+          }
+          notifyApp("Couldn't save highlights. Close the window again to close without saving.");
         }
       })();
     })

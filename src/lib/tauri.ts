@@ -83,12 +83,26 @@ export const tauri = {
    *  `highlights.key`; it never appears in highlights.json. */
   getHighlightsKey: () => invoke<string>("get_highlights_key"),
   /**
+   * Acknowledge a window-close flush request the moment it is received: this
+   * tells the backend the frontend is alive, which suppresses its 2-second
+   * "frontend dead" fallback and starts a 30-second ceiling instead. Called
+   * first in the `highlights://flush-request` handler, before the flush.
+   */
+  ackCloseRequest: () => invoke<void>("ack_close_request"),
+  /**
    * Final word on a window close: the backend intercepts the first close
-   * request, emits `highlights://flush-request` and waits (with a 2-second
-   * fallback). After awaiting its highlights flush the frontend calls this to
-   * let the close through. See `onHighlightsFlushRequest`.
+   * request, emits `highlights://flush-request`, waits for an ack and then a
+   * flush. After awaiting its highlights flush the frontend calls this to let
+   * the close through (and to stop the 30-second ceiling). See
+   * `onHighlightsFlushRequest`.
    */
   confirmClose: () => invoke<void>("confirm_close"),
+  /**
+   * Cancel a window close after a failed highlights flush: stops the 30-second
+   * ceiling without closing the window. `attempted` stays set on the backend,
+   * so a later close request closes for real ("close without saving").
+   */
+  cancelClose: () => invoke<void>("cancel_close"),
 };
 
 /**

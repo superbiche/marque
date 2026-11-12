@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_COLOUR,
   HIGHLIGHT_COLOURS,
+  __hashCallCount,
+  __resetRelocationStats,
+  __resetWindowCache,
   anchorFromSelection,
   buildTextMap,
   collectBlocks,
@@ -22,6 +25,7 @@ import {
   sectionHeadingForRange,
   siphash24Hex,
   utf8,
+  v4UuidFromBytes,
   type Highlight,
   type HighlightAnchor,
   type HighlightColour,
@@ -38,6 +42,10 @@ const TEST_KEY = Uint8Array.from({ length: 16 }, (_, i) => i);
 
 /** Canonical test hash: SipHash-2-4 over the UTF-8 bytes of the normalized passage. */
 const h = (s: string) => siphash24Hex(utf8(normalizeText(s)), TEST_KEY);
+
+// The relocation window cache is module-level; start each test cold so the
+// cache (and its hash counter) never leaks state between tests.
+beforeEach(() => __resetWindowCache());
 
 function makeContainer(html: string): HTMLElement {
   const container = document.createElement("article");
@@ -742,6 +750,83 @@ describe("resolveAnchors", () => {
     const { resolved, orphaned } = resolveAnchors(doc, [makeHighlight(a)], TEST_KEY);
     expect(resolved).toHaveLength(0);
     expect(orphaned).toHaveLength(1);
+  });
+});
+
+describe("newHighlightId (v4 UUID, never Math.random)", () => {
+  it("returns a valid v4 UUID (version-4 and RFC-4122 variant nibbles)", () => {
+    for (let i = 0; i < 50; i++) {
+      const id = newHighlightId();
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    }
+  });
+
+  it("v4UuidFromBytes sets the version and variant bits on a known byte array", () => {
+    const b = new Uint8Array(16).fill(0xab); // 0xab = 1010 1011
+    const id = v4UuidFromBytes(b);
+    // byte 6: (0xab & 0x0f)|0x40 = 0x4b; byte 8: (0xab & 0x3f)|0x80 = 0xab
+    expect(id).toBe("abababab-abab-4bab-abab-abababababab");
+    expect(id[14]).toBe("4"); // version nibble
+    expect(["8", "9", "a", "b"]).toContain(id[19]); // variant nibble
+  });
+});
+
+describe("relocation window cache (item 8)", () => {
+  it("a second resolve of an unchanged container is a cache hit (far fewer hashes)", () => {
+    // One long block (~300 chars) and one short; an orphan anchor whose
+    // passage is nowhere forces a full sliding scan of every block.
+    const longText = "lorem ipsum dolor sit amet, consectetur. ".repeat(8);
+    const doc = makeContainer(
+      `<p data-source-map="0,1">${longText}</p>\n<p data-source-map="2,3">short block</p>`,
+    );
+    const orphan: HighlightAnchor = {
+      startLine: 0,
+      endLine: 1,
+      startOffset: 0,
+      length: 3,
+      hash: h("zzz"),
+    };
+
+    // The counter was reset by `beforeEach`, so the first resolve is a cold
+    // pass: a full scan of the long block (hundreds of windows) plus the
+    // short one — comfortably more than a couple of hashes.
+    const first = resolveAnchors(doc, [makeHighlight(orphan)], TEST_KEY);
+    expect(first.orphaned).toHaveLength(1);
+    const coldHashes = __hashCallCount();
+    expect(coldHashes).toBeGreaterThan(2);
+
+    // Reset, then re-resolve the unchanged container: each block now costs
+    // only its step-(a) hash (a cache hit is never a re-scan).
+    __resetRelocationStats();
+    const second = resolveAnchors(doc, [makeHighlight(orphan)], TEST_KEY);
+    expect(second.orphaned).toHaveLength(1);
+    const warmHashes = __hashCallCount();
+    expect(warmHashes).toBeLessThan(coldHashes / 10);
+  });
+
+  it("a changed block is re-scanned (the cache key follows the text)", () => {
+    // The same source-mapped block, different normalized text: the first
+    // resolve (no "hello") is cached as not-found, but changing the text
+    // changes the digest — so the second resolve must not reuse that stale
+    // "not found" and must find the now-present passage.
+    const doc = makeContainer(`<p data-source-map="0,1">totally different words</p>`);
+    const a: HighlightAnchor = {
+      startLine: 0,
+      endLine: 1,
+      startOffset: 0,
+      length: 5,
+      hash: h("hello"),
+    };
+    const first = resolveAnchors(doc, [makeHighlight(a)], TEST_KEY);
+    expect(first.orphaned).toHaveLength(1);
+    // Change the block's text (the `data-source-map` range is untouched).
+    const p = doc.querySelector("p")!;
+    p.textContent = "and then, hello appears here";
+    const second = resolveAnchors(doc, [makeHighlight(a)], TEST_KEY);
+    expect(second.orphaned).toHaveLength(0);
+    expect(second.resolved).toHaveLength(1);
+    // "and then, " is 10 chars, so "hello" sits at offset 10.
+    expect(second.resolved[0].startOffset).toBe(10);
   });
 });
 
