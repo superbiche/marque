@@ -67,16 +67,20 @@ export function HighlightEditPopover({
   // Cancel a pending delayed delete. It captures the *old* highlight in its
   // closure, so it must not survive a close or a switch to a new target
   // (item 12): otherwise it would fire against a stale or gone highlight.
+  // The "Deleted" flash is part of the pending delete, so it is undone
+  // here too: a close or target change that cancels the timer must not
+  // leave the new target's button showing "Deleted" and disabled forever.
   const clearDeleteTimer = React.useCallback(() => {
     if (deleteTimerRef.current !== null) {
       window.clearTimeout(deleteTimerRef.current);
       deleteTimerRef.current = null;
     }
+    setDeleteFlashing(false);
   }, []);
 
-  // When a new highlight is targeted, reset edit state and seed the draft. A
-  // close (state → null) or a new target both invalidate any pending delayed
-  // delete.
+  // When a new highlight is targeted, reset edit state (including the
+  // "Deleted" flash) and seed the draft. A close (state → null) or a new
+  // target both invalidate any pending delayed delete.
   React.useEffect(() => {
     clearDeleteTimer();
     if (!state) {
@@ -92,10 +96,17 @@ export function HighlightEditPopover({
     if (editingNote) inputRef.current?.focus();
   }, [editingNote]);
 
-  // Move focus into the popover on open and, on a close where focus has
-  // "dropped" (to body), return it to the article. The popover is non-modal
-  // (focus is never trapped) and we never steal a focus the user just placed
-  // elsewhere by clicking out.
+  // Move focus into the popover on open. Safe here: this popover opens only
+  // from a click on an existing highlight, and a live selection never
+  // coexists with the open (the click that opened it already collapsed it —
+  // the click handler skips a non-collapsed selection). The popover is
+  // non-modal (focus is never trapped) and we never steal a focus the user
+  // just placed elsewhere by clicking out.
+  //
+  // On a close where focus has "dropped" (to body), return it to the article
+  // — unless a live selection is still in the document: focusing the article
+  // can collapse it, and a selection made while the popover was open is
+  // exactly what the creation popover then needs to stay alive.
   const prevOpenRef = React.useRef(false);
   React.useEffect(() => {
     const open = state !== null;
@@ -107,7 +118,9 @@ export function HighlightEditPopover({
       const active = document.activeElement;
       const noRealFocus =
         active == null || active === document.body || active === document.documentElement;
-      if (noRealFocus) articleRef?.current?.focus();
+      const sel = window.getSelection();
+      const liveSelection = sel != null && sel.rangeCount > 0 && !sel.isCollapsed;
+      if (noRealFocus && !liveSelection) articleRef?.current?.focus();
     }
   }, [state, articleRef]);
 
@@ -238,6 +251,9 @@ export function HighlightEditPopover({
             }
             deleteTimerRef.current = window.setTimeout(() => {
               deleteTimerRef.current = null;
+              // A completed delete resets the flash as well, so it cannot
+              // linger onto the next highlight targeted after a dismiss.
+              setDeleteFlashing(false);
               onDelete(h.id);
             }, 450);
           }}

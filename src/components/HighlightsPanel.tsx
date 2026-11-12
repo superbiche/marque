@@ -36,7 +36,7 @@ function CopyButton({
   text,
   successMessage = "Copied",
   title,
-  iconClassName = "h-3 w-3",
+  iconClassName = "size-3",
   className,
   withLabel,
   disabled,
@@ -50,8 +50,10 @@ function CopyButton({
     [],
   );
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size={withLabel ? "xxs" : "icon-xs"}
       title={title}
       disabled={disabled}
       onClick={() => {
@@ -68,15 +70,14 @@ function CopyButton({
         })();
       }}
       className={cn(
-        "flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-muted-foreground transition hover:bg-accent hover:text-foreground",
+        "text-muted-foreground",
         flashing && "text-emerald-600 dark:text-emerald-400 hover:text-emerald-600",
-        disabled && "pointer-events-none opacity-40 hover:bg-transparent",
         className,
       )}
     >
       {flashing ? <Check className={iconClassName} /> : <Copy className={iconClassName} />}
       {withLabel && <span>{flashing ? "Copied" : "Copy"}</span>}
-    </button>
+    </Button>
   );
 }
 
@@ -141,20 +142,23 @@ function NoteEditor({ initial, onCommit, onCancel }: NoteEditorProps) {
         </div>
       )}
       <div className="flex justify-end gap-1">
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="xxs"
+          className="text-muted-foreground"
           onClick={onCancel}
-          className="rounded-sm px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
         >
           Cancel (Esc)
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="xxs"
           onClick={() => onCommit(value.trim() || undefined)}
-          className="rounded-sm px-1.5 py-0.5 text-[10px] text-foreground hover:bg-accent"
         >
-          <Check className="mr-1 inline-block h-3 w-3" /> Save (⌘↵)
-        </button>
+          <Check className="size-3" /> Save (⌘↵)
+        </Button>
       </div>
     </div>
   );
@@ -433,27 +437,30 @@ export function HighlightsPanel({
                           ) : null}
                           <div className="mt-1 flex justify-end gap-1 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100">
                             {!isEditing && (
-                              <button
+                              <Button
                                 type="button"
+                                variant="ghost"
+                                size="icon-xs"
+                                className="text-muted-foreground"
                                 onClick={() => setEditingId(h.id)}
-                                className="rounded-sm px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
                                 title={h.note ? "Edit note" : "Add note"}
                               >
-                                <Pencil className="h-3 w-3" />
-                              </button>
+                                <Pencil className="size-3" />
+                              </Button>
                             )}
                             <CopyButton
                               text={formatExportItem(toExportItem(e))}
                               title="Copy item"
                             />
-                            <button
+                            <Button
                               type="button"
+                              variant="destructive"
+                              size="icon-xs"
                               onClick={() => onRemove(h.id)}
-                              className="rounded-sm px-1.5 py-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                               title="Delete highlight"
                             >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
+                              <Trash2 className="size-3" />
+                            </Button>
                           </div>
                         </li>
                       );
@@ -500,14 +507,15 @@ export function HighlightsPanel({
                             text={formatExportItem(toExportItem(e))}
                             title="Copy item"
                           />
-                          <button
+                          <Button
                             type="button"
+                            variant="destructive"
+                            size="icon-xs"
                             onClick={() => onRemove(h.id)}
-                            className="rounded-sm px-1.5 py-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                             title="Delete highlight"
                           >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
+                            <Trash2 className="size-3" />
+                          </Button>
                         </div>
                       </li>
                     );

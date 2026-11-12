@@ -757,25 +757,31 @@ export function collectBlocks(container: HTMLElement): MappedBlock[] {
 // `findWindow`'s sliding scan is the expensive step (≈ O(blockLen · L) SipHash
 // bytes). Re-resolving an unchanged container (a re-render, a re-select, a
 // re-apply) would re-scan every block for every highlight for nothing. This
-// module-level cache memoizes the scan result per (block normalized text,
-// anchor, key) so an unchanged block is not re-scanned. It is a pure function
-// of its key, in-memory only, never persisted, and self-caps at
-// MAX_WINDOW_CACHE entries (the oldest is dropped on overflow).
+// module-level cache memoizes the scan per (block normalized text, anchor
+// hash, length, key) — *all* matching window starts in ascending order — so
+// an unchanged block is not re-scanned. The stored offset is deliberately
+// NOT part of the key: it is consulted at lookup time, when the match
+// nearest to it is picked — so two anchors that differ only in stored
+// offset share one scan. The cache is a pure function of its key, in-memory
+// only, never persisted, and self-caps at MAX_WINDOW_CACHE entries (the
+// oldest is dropped on overflow).
 //
 // The key digests the block's normalized text (three FNV-32s, 96 bits) plus
-// its length, the anchor's hash and length, and a per-key identity (an integer
-// in a `WeakMap`, so the cache is bound to *this* key and a different key —
-// which changes every stored hash — misses cleanly). A "found" entry is
-// re-verified with a single window hash before use (guards a digest
-// collision); a "not found" entry is trusted as computed (step (a) already
-// ran).
+// its length, the anchor's hash and length, and a per-key identity (an
+// integer in a `WeakMap`, so the cache is bound to *this* key and a different
+// key — which changes every stored hash — misses cleanly). The chosen match
+// is re-verified with a single window hash before use (guards a digest
+// collision); an empty list (no match) is trusted as computed (step (a)
+// already ran).
 // ---------------------------------------------------------------------------
 
 /** A keyed 64-bit hash: `data` -> 16-hex digest. `siphash24Hex` is the real one. */
 type HashFn = (data: Uint8Array, key: Uint8Array) => string;
 
 const MAX_WINDOW_CACHE = 4096;
-const windowCache = new Map<string, number | null>();
+// Every window start matching (digest, length, anchor hash, key) — ascending.
+// An empty list is a trusted "no match" (the scan ran and found nothing).
+const windowCache = new Map<string, number[]>();
 // A stable integer per key object, so a cache entry is bound to the key that
 // produced it. A WeakMap lets the identity die with the key.
 const keyIdentity = new WeakMap<Uint8Array, number>();
@@ -831,11 +837,27 @@ function windowCacheKey(text: string, anchor: HighlightAnchor, key: Uint8Array):
 }
 
 /**
+ * The match nearest to `offset` in an ascending match list; the earlier
+ * match wins on a tie (that is the scan order). `null` when the list is
+ * empty.
+ */
+function nearestMatch(matches: number[], offset: number): number | null {
+  let best: number | null = null;
+  for (const m of matches) {
+    if (best === null || Math.abs(m - offset) < Math.abs(best - offset)) {
+      best = m;
+    }
+  }
+  return best;
+}
+
+/**
  * Find a window of `anchor.length` matching `anchor.hash` in a block's
  * normalized text. Returns the window start, or null. Step (a) checks the
  * stored offset first (always a single hash); then, for the real keyed hash,
- * consults the relocation cache before any sliding scan. The scan keeps the
- * match closest to the stored offset (first one wins on a tie).
+ * consults the relocation cache before any sliding scan. The cache stores
+ * every match (the key has no stored offset), and this picks the one
+ * closest to the stored offset (first one wins on a tie) at lookup time.
  */
 function findWindow(
   text: string,
@@ -865,34 +887,36 @@ function findWindow(
   if (useCache) {
     const cached = windowCache.get(cacheKey!);
     if (cached !== undefined) {
-      if (cached === null) return null; // not found: trust the prior scan
-      // Re-verify a found position with a single window hash (collision guard).
+      if (cached.length === 0) return null; // no match: trust the prior scan
+      // Nearest cached match to this anchor's stored offset; re-verify it
+      // with a single window hash (collision guard).
+      const best = nearestMatch(cached, anchor.startOffset);
       if (
-        cached + anchor.length <= text.length &&
-        windowHash(cached, anchor.length) === anchor.hash
+        best !== null &&
+        best + anchor.length <= text.length &&
+        windowHash(best, anchor.length) === anchor.hash
       ) {
-        return cached;
+        return best;
       }
       // Collision or text changed since: fall through and re-scan.
     }
   }
 
-  // Full scan: slide a window of the stored length, keep the match closest to
-  // the stored offset (first one wins on a tie).
-  let best: number | null = null;
+  // Full scan: slide a window of the stored length, keep every match (the
+  // stored offset decides which one is returned, at lookup time).
+  const matches: number[] = [];
   for (let i = 0; i + anchor.length <= text.length; i++) {
     if (windowHash(i, anchor.length) !== anchor.hash) continue;
-    if (best === null || Math.abs(i - anchor.startOffset) < Math.abs(best - anchor.startOffset)) {
-      best = i;
-    }
+    matches.push(i);
   }
+  const best = nearestMatch(matches, anchor.startOffset);
 
   if (useCache) {
     if (windowCache.size >= MAX_WINDOW_CACHE) {
       const first = windowCache.keys().next().value;
       if (first !== undefined) windowCache.delete(first);
     }
-    windowCache.set(cacheKey!, best);
+    windowCache.set(cacheKey!, matches);
   }
 
   return best;

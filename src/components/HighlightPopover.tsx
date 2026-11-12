@@ -87,22 +87,31 @@ export function HighlightPopover({
     if (annotating) inputRef.current?.focus();
   }, [annotating]);
 
-  // Move focus into the popover on open and, on a close where focus has
-  // "dropped" (to body), return it to the article. The popover is non-modal —
-  // focus is never trapped — and we never steal a focus the user just placed
-  // elsewhere by clicking out.
+  // Never move focus when this popover opens: it is offered in direct
+  // response to a selection the user just made, and a programmatic focus in
+  // WebKit collapses the document selection — the Viewer's selectionchange
+  // listener then reads "selection gone" and closes the popover before the
+  // user can act (regression found in the 2026-11-11 WebKitGTK probe). The
+  // number-key shortcuts work through the window listener regardless of
+  // focus, and Tab reaches the buttons directly (the container is
+  // deliberately not a focus target — see the tabIndex note below).
+  //
+  // On a close where focus has "dropped" (to body), return it to the article
+  // — unless a live selection is still in the document: focusing the article
+  // can collapse it, and the selection is what this popover exists for.
   const prevOpenRef = React.useRef(false);
   React.useEffect(() => {
     const open = state !== null;
     if (open) {
-      ref.current?.focus();
       prevOpenRef.current = true;
     } else if (prevOpenRef.current) {
       prevOpenRef.current = false;
       const active = document.activeElement;
       const noRealFocus =
         active == null || active === document.body || active === document.documentElement;
-      if (noRealFocus) articleRef?.current?.focus();
+      const sel = window.getSelection();
+      const liveSelection = sel != null && sel.rangeCount > 0 && !sel.isCollapsed;
+      if (noRealFocus && !liveSelection) articleRef?.current?.focus();
     }
   }, [state, articleRef]);
 
@@ -149,7 +158,10 @@ export function HighlightPopover({
   return (
     <div
       ref={ref}
-      tabIndex={-1}
+      // No tabIndex: nothing in this popover may be a programmatic focus
+      // target while it is serving a live selection (a focus move would
+      // collapse that selection in WebKit). The buttons stay reachable by
+      // Tab.
       role="toolbar"
       aria-label="Highlight"
       className="fixed z-50 flex items-center gap-1 rounded-md border bg-popover p-1 shadow-md"

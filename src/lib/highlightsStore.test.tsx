@@ -187,7 +187,7 @@ describe("key loading (F2, store side)", () => {
     expect(app.ctx.highlightsKey).toBeNull();
     expect(m.notifyApp).toHaveBeenCalledTimes(1);
     expect(m.notifyApp).toHaveBeenCalledWith(
-      "Highlights are unavailable: the highlights key could not be read.",
+      "Highlights are unavailable: the highlights key could not be read. Reopen the document to try again.",
     );
     // A loadFile retries the read; still failing, it adds no second notification.
     await loadFile(app.ctx, A, []);
@@ -596,6 +596,69 @@ describe("F7: the close flush", () => {
       ok = (await app.ctx.flush()).ok;
     });
     expect(ok).toBe(false);
+    app.unmount();
+  });
+
+  it("refuses a mutation between a successful close flush and confirmClose (no save, no notification)", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    // A normal edit, saved before the close attempt.
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves();
+    expect(m.saveHighlights).toHaveBeenCalledTimes(1);
+
+    // A close whose confirm hangs: the flush succeeds, so the gate (set
+    // when the request arrived) is still up between the flush and
+    // confirmClose.
+    m.confirmClose.mockImplementationOnce(() => new Promise(() => {}));
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).toHaveBeenCalledTimes(1);
+
+    // A mutation in that window is refused like an unloaded path: no
+    // state change, no save queued, no notification.
+    act(() => app.ctx.addHighlight(A, makeHighlight("a3")));
+    expect(app.ctx.byFile[A]).toEqual([a1, a2]);
+    expect(m.saveHighlights).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).not.toHaveBeenCalled();
+    app.unmount();
+  });
+
+  it("a cancelled close re-enables mutations", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    // A close whose flush keeps failing is cancelled; the gate is cleared
+    // with it, and the next mutation works again (and retries the save).
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves(); // the edit's save fails: one streak notification
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
+
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.confirmClose).not.toHaveBeenCalled();
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    expect(m.notifyApp).toHaveBeenLastCalledWith(
+      "Couldn't save highlights. Close the window again to close without saving.",
+    );
+
+    // The close was cancelled: the window is open, mutations work again.
+    m.saveHighlights.mockImplementation(() => Promise.resolve());
+    act(() => app.ctx.updateHighlight(A, "a2", { colour: "pink" }));
+    expect(app.ctx.byFile[A]).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "a2", colour: "pink" })]),
+    );
+    await drainSaves();
+    expect(m.saveHighlights).toHaveBeenLastCalledWith(
+      A,
+      expect.arrayContaining([expect.objectContaining({ id: "a2", colour: "pink" })]),
+    );
     app.unmount();
   });
 });

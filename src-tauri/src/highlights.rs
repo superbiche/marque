@@ -20,8 +20,13 @@
 //! is capped at `MAX_HIGHLIGHTS_PER_FILE` entries; non-absolute path keys
 //! are dropped. When anything is dropped the *original* file is first
 //! *copied* (never renamed) to `highlights.json.invalid-<timestamp>`
-//! (0600 on Unix) so a later save cannot destroy the user's data; the live
-//! file stays, and every subsequent load re-filters it.
+//! (0600 on Unix) so a later save cannot destroy the user's data, and the
+//! *filtered* store is written back over the live file — but only when the
+//! filtering changed it — so the next load is clean.
+//!
+//! **Read safety:** a load takes `RMW_LOCK` (the same lock a save's
+//! read-modify-write holds) and a clean store is never rewritten, so a read
+//! can never interleave with a save or clobber one that just landed.
 //!
 //! **Key handling (S3):** an existing valid key file is tightened to 0600
 //! before use (a failed tightening is a hard error — the key is not used);
@@ -153,7 +158,15 @@ impl HighlightsFile {
     /// is clean and a re-filtering backup does not accumulate on every
     /// load. A failure of that write-back fails the load: the live file
     /// stays as found and the original remains in the backup.
-    pub fn load(dir: &Path) -> AppResult<HighlightsFile> {
+    ///
+    /// The write-back happens only when the filtering actually changed the
+    /// store; a clean store is read and returned untouched, so a plain read
+    /// can never write a stale snapshot over a save that just landed.
+    ///
+    /// Callers that already hold `RMW_LOCK` must use this (never the
+    /// locking `load` — a double lock would deadlock: parking_lot mutexes
+    /// are not reentrant).
+    pub fn load_unlocked(dir: &Path) -> AppResult<HighlightsFile> {
         let p = dir.join(FILE_NAME);
         if !p.exists() {
             return Ok(Self::default());
@@ -244,13 +257,21 @@ impl HighlightsFile {
                         backup.display()
                     );
                 }
-                // Drop paths left empty by the filtering.
+                // Drop paths left empty by the filtering (or empty in the
+                // file itself — a hand-edit a save would never write).
+                let keys_before = file.files.len();
                 file.files.retain(|_, list| !list.is_empty());
-                // The filtered store replaces the live file (same atomic
-                // path as a normal save); a failure fails the load, so
-                // the file is left as found and the original stays in
-                // the backup.
-                file.save(dir)?;
+                let changed =
+                    dropped_paths + truncated + dropped_entries > 0 || file.files.len() != keys_before;
+                // Only when the filtering changed the store does it replace
+                // the live file (same atomic path as a normal save); a
+                // failure fails the load, so the file is left as found and
+                // the original stays in the backup. A clean store is never
+                // rewritten: a read must not write a snapshot back over a
+                // save that landed after it read.
+                if changed {
+                    file.save(dir)?;
+                }
                 Ok(file)
             }
             Err(_) => {
@@ -293,13 +314,25 @@ impl HighlightsFile {
         Ok(())
     }
 
+    /// `load_unlocked`, serialized with `update_path` (and with other
+    /// loads) by `RMW_LOCK`: a read — `get_highlights`,
+    /// `list_highlighted_paths` — can never interleave with a save's
+    /// read-modify-write, and it never writes a clean store back, so it
+    /// cannot clobber a save that just landed.
+    pub fn load(dir: &Path) -> AppResult<HighlightsFile> {
+        let _guard = RMW_LOCK.lock();
+        Self::load_unlocked(dir)
+    }
+
     /// Read-modify-write for one document path, serialized across the
     /// process: two concurrent callers (rapid edits, two panes) each do
     /// load → set → save, and without the lock the second save would
-    /// clobber the first's update.
+    /// clobber the first's update. It holds `RMW_LOCK` over
+    /// `load_unlocked` — never the locking `load`, which would deadlock,
+    /// parking_lot mutexes not being reentrant — and over `save`.
     pub fn update_path(dir: &Path, path: String, highlights: Vec<Highlight>) -> AppResult<()> {
         let _guard = RMW_LOCK.lock();
-        let mut file = Self::load(dir)?;
+        let mut file = Self::load_unlocked(dir)?;
         file.set(path, highlights);
         file.save(dir)
     }
@@ -308,7 +341,9 @@ impl HighlightsFile {
 /// `load`/`save` can be called from concurrent command tasks; the
 /// rename-based write is atomic on its own, but the read-modify-write must
 /// be serialized so concurrent saves to different paths cannot lose each
-/// other. `RMW_LOCK` is held for the whole load → set → save; `SAVE_LOCK`
+/// other. `RMW_LOCK` is held for the whole load → set → save and also for
+/// plain loads, which write the store back only when their filtering
+/// changed it — a read of a clean store is never a write. `SAVE_LOCK`
 /// serializes bare `save` calls taken on their own.
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 static RMW_LOCK: Mutex<()> = Mutex::new(());
@@ -604,6 +639,8 @@ fn looks_like_rfc3339(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     /// Absolute on every platform: Windows needs a drive prefix, and the
     /// load filter drops non-absolute keys.
@@ -864,6 +901,74 @@ mod tests {
             assert_eq!(items.len(), 1, "path for file-{} was lost", i);
             assert_eq!(items[0].id, id(&i.to_string()));
         }
+    }
+
+    /// A load of a store the filtering leaves unchanged must not rewrite
+    /// the file: a read that re-serialized on every call would let an
+    /// older snapshot clobber a save that landed after it read (the F10
+    /// write-back happens only when the filtering changed the store).
+    #[test]
+    fn a_clean_store_is_never_rewritten_by_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut f = HighlightsFile::default();
+        f.set(DOC_A.into(), vec![h("1", Colour::Yellow, 0, 1)]);
+        f.save(dir.path()).unwrap();
+
+        let path = dir.path().join(FILE_NAME);
+        let before = std::fs::read_to_string(&path).unwrap();
+        let mtime_before = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        let loaded = HighlightsFile::load(dir.path()).unwrap();
+        assert_eq!(loaded.get(DOC_A).len(), 1);
+
+        // Untouched: the same bytes, the same mtime (a rename-based
+        // rewrite changes both), and no invalid backup.
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            mtime_before
+        );
+        assert!(invalid_backups(dir.path()).is_empty());
+    }
+
+    /// A concurrent plain read (`load`) must never lose an `update_path`
+    /// whose save lands after the read's snapshot was taken: the read is
+    /// serialized with the update by `RMW_LOCK` and writes nothing back.
+    /// Stress: one reader load-looping while N rapid updates race it; the
+    /// last update must be the one on disk.
+    #[test]
+    fn a_concurrent_load_never_clobbers_an_update_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let doc = doc_path("doc.md");
+        let stop = Arc::new(AtomicBool::new(false));
+
+        // A reader doing what get_highlights / list_highlighted_paths do:
+        // plain loads, in a tight loop.
+        let reader_stop = Arc::clone(&stop);
+        let reader_path = path.clone();
+        let reader = std::thread::spawn(move || {
+            while !reader_stop.load(Ordering::Relaxed) {
+                let _ = HighlightsFile::load(&reader_path);
+            }
+        });
+
+        // N rapid updates to the same path.
+        let n = 50;
+        for i in 0..n {
+            let mut e = h("1", Colour::Yellow, 0, 1);
+            e.anchor.start_line = i;
+            e.anchor.end_line = i + 1;
+            HighlightsFile::update_path(&path, doc.clone(), vec![e]).unwrap();
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+
+        let loaded = HighlightsFile::load(&path).unwrap();
+        let items = loaded.get(&doc);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].anchor.start_line, n as u32 - 1);
     }
 
     #[test]

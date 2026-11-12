@@ -133,6 +133,12 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   const loadStatusRef = React.useRef<Map<string, HighlightLoadStatus>>(new Map());
   const writersRef = React.useRef<Map<string, PathWriter>>(new Map());
   const undoTimerRef = React.useRef<number | null>(null);
+  // True from the instant a close-flush request arrives until the close is
+  // cancelled. Mutations are refused while it is set: a save queued between
+  // a successful flush and `confirmClose` — or mid-flush, racing the
+  // re-check loop — would never be persisted. It is cleared only on a
+  // cancelled close, when the window stays open and editing resumes.
+  const closingRef = React.useRef(false);
 
   React.useEffect(() => {
     localStorage.setItem(ACTIVE_COLOUR_KEY, activeColour);
@@ -169,13 +175,17 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
           setHighlightsKey(key);
         } else if (!keyNotifiedRef.current) {
           keyNotifiedRef.current = true;
-          notifyApp("Highlights are unavailable: the highlights key could not be read.");
+          notifyApp(
+            "Highlights are unavailable: the highlights key could not be read. Reopen the document to try again.",
+          );
         }
       })
       .catch((err) => {
         if (!keyNotifiedRef.current) {
           keyNotifiedRef.current = true;
-          notifyApp("Highlights are unavailable: the highlights key could not be read.");
+          notifyApp(
+            "Highlights are unavailable: the highlights key could not be read. Reopen the document to try again.",
+          );
           console.error("failed to load the highlights key", err);
         }
       })
@@ -322,8 +332,10 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
 
   // Gate: mutations are refused until the path's load has actually landed
   // (and the key, for anchoring, is available). Creation is disabled while a
-  // load is pending so a late fetch can never clobber local state.
-  const isMutable = (path: string): boolean => loadStatusRef.current.get(path) === "loaded";
+  // load is pending so a late fetch can never clobber local state. A close
+  // attempt (closingRef) refuses them too — silently, like an unloaded path.
+  const isMutable = (path: string): boolean =>
+    !closingRef.current && loadStatusRef.current.get(path) === "loaded";
 
   // --- Mutations -------------------------------------------------------
 
@@ -438,6 +450,12 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
     let disposed = false;
     onHighlightsFlushRequest(() => {
       if (disposed) return;
+      // From the instant the request arrives, gate the mutations: a
+      // mutation between a successful flush and `confirmClose` — or while
+      // the flush is running — would queue a save the window is about to
+      // destroy and never persist. The gate is cleared only when the close
+      // is cancelled (the window stays open).
+      closingRef.current = true;
       void (async () => {
         try {
           await tauri.ackCloseRequest();
@@ -452,6 +470,8 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
             // the 30-second ceiling destroys the window either way
           }
         } else {
+          // The window stays open: resume normal mutation behaviour.
+          closingRef.current = false;
           try {
             await tauri.cancelClose();
           } catch {

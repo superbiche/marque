@@ -828,6 +828,42 @@ describe("relocation window cache (item 8)", () => {
     // "and then, " is 10 chars, so "hello" sits at offset 10.
     expect(second.resolved[0].startOffset).toBe(10);
   });
+
+  it("the stored offset is consulted at lookup, not in the cache key (cached == fresh)", () => {
+    // The reviewer's probe: "cat" appears twice in the block (offsets 3
+    // and 12). An anchor stored at offset 0 resolves to 3 and caches the
+    // scan; an anchor with the *same* (hash, length) but stored offset 15
+    // must be served from that cached match list as 12 — not 3, which the
+    // pre-fix "single cached position" served from its own key. A fresh
+    // (cold-cache) scan of the same anchor must agree with the cached
+    // answer.
+    const text = "xx cat xxxx cat xx";
+    const anchor = (startOffset: number): HighlightAnchor => ({
+      startLine: 0,
+      endLine: 1,
+      startOffset,
+      length: 3,
+      hash: h("cat"),
+    });
+    const doc = makeContainer(`<p data-source-map="0,1">${text}</p>`);
+
+    const first = resolveAnchors(doc, [makeHighlight(anchor(0))], TEST_KEY);
+    expect(first.resolved).toHaveLength(1);
+    expect(first.resolved[0].startOffset).toBe(3);
+
+    // Same (block, hash, length) — the cache holds every match; the
+    // stored offset picks among them at lookup.
+    const cached = resolveAnchors(doc, [makeHighlight(anchor(15))], TEST_KEY);
+    expect(cached.resolved).toHaveLength(1);
+    expect(cached.resolved[0].startOffset).toBe(12);
+
+    // The fresh scan (cache reset by `beforeEach` between tests, cleared
+    // here to be explicit) agrees with the cached answer.
+    __resetWindowCache();
+    const fresh = resolveAnchors(doc, [makeHighlight(anchor(15))], TEST_KEY);
+    expect(fresh.resolved).toHaveLength(1);
+    expect(fresh.resolved[0].startOffset).toBe(12);
+  });
 });
 
 describe("collectBlocks / sectionHeadingForRange", () => {
