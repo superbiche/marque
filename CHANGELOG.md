@@ -4,25 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
-
-### Fixed
-- macOS: printing a document shown in the dark theme no longer flashes the app to the light theme (and can no longer come back dark once the print sheet is dismissed). Code blocks now render theme-agnostic markup that the print styles force to the light palette, so the app's theme is never touched when printing; the on-screen appearance is unchanged.
-- Double ⌘P (or ⌘P + the toolbar printer button) while a print sheet is still up no longer opens a second sheet. A print now arms a re-entry guard that stays up until the sheet is genuinely dismissed — released by the first of the `afterprint` / window-`focus` / document-visible signals (the print sheet holds the window's focus while it is up and returns it when it closes, so re-entry stays blocked for the sheet's whole life), with a backstop that re-checks focus every 2 s and releases only once the window has focus again — a sheet left open stays guarded for as long as it is open, with no time-based release, since the moment the user can interact with the window again focus has returned and the guard releases.
-- Bold, italic and underlined text inside a markdown code fence (e.g. a ` ```markdown ` block showing `**bold**` / `*italic*` / a link) now renders with its weight, slant and underline on screen and in print. Shiki emits these as `--shiki-*-font-style` / `-font-weight` / `-text-decoration` variables; the styles now map them (with the light values forced in print, matching the colour mapping).
-
 ## Hard fork - 2026-08-02
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.
 
 ## [Unreleased]
 
-### Fixed
-- Command palette: after the query changed, the previous search's file results were still visible and selectable until the new search returned — pressing Enter in that window could open a file that does not match the current query. File results are now shown only when they belong to the current query (actions or "No results." fill the gap), and a response that lands after the user has moved on is dropped.
-
 ### Changed
-- Command palette: the Actions list (theme, zoom, split panes, highlights panel, open file, add folder) is now searchable while you type. A query lists up to five matching actions in an Actions group above the file results and Enter runs the selected one; with an empty query the full list shows in the same order as before. Matching is case-insensitive, ranking prefix and word-start matches before substrings, with subsequence matches as the lowest tier, so "highl" finds "Toggle Highlights Panel" and "dark" finds "Theme: Dark".
-- Command palette: file results now show exactly what the Rust (nucleo) index returns, in nucleo's order. cmdk's built-in filter was left on, which re-ranked the pre-ranked results in JavaScript and could hide matches the Rust index had found.
+- Command palette: actions (theme, zoom, split panes, highlights panel, open file, add folder) are searchable while you type. Up to five matching actions show above the file results and Enter runs the selected one; with an empty query the full list shows as before. "highl" finds "Toggle Highlights Panel", "dark" finds "Theme: Dark".
+- Command palette: file results show exactly what the Rust (nucleo) index returns, in its order; the palette no longer re-ranks them in JavaScript.
+
+### Fixed
+- Printing from the dark theme no longer switches the app theme around the print call: print styles force the light theme, code blocks included. On macOS, where the print sheet opens without telling the app when it closes, the theme could come back dark before the page was captured. A second ⌘P while a print sheet is open no longer opens another sheet.
+- Bold, italic and underlined text inside a code block (for example a markdown fence showing `**bold**`) keeps its styling on screen and in print.
 
 ## [0.4.11] - 2026-11-12
 
