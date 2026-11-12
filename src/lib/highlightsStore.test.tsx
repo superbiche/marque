@@ -9,10 +9,11 @@
  * - F7: `flush()` saves pending (unsaved) paths, awaits in-flight saves, and
  *   the close-request flow awaits the flush before letting the close through
  *   — including when the save fails.
- * - F9/S1: per-path serialized writers — a mutation on a second path is
- *   saved while the first path's save is still in flight, and a mutation
- *   landing while its own save is in flight is re-sent with the newest
- *   snapshot (never lost to a stale in-flight one).
+ * - F9/F12: one save queue per path, no debounce — every mutation queues a
+ *   save that sends the path's current list if it is newer than the last one
+ *   persisted. Oracles: the reviewer's lifecycle sequence (a no-op save must
+ *   never stop later saves), an edit during a save, a flush during a save, a
+ *   retry after a failure, and a burst of edits ending in the final list.
  * - F2: the one-shot load of the per-installation key (Tauri side of the
  *   keyed fingerprints).
  *
@@ -21,11 +22,6 @@
  * react-dom/client + React.act under happy-dom. `window.__TAURI_INTERNALS__`
  * is defined before the store module runs, so the Tauri-only effects (the
  * one-shot key load and the close-flush listener) run here too.
- *
- * The store's timers are the happy-dom window's own `window.setTimeout`,
- * which vitest's fake timers do not replace (the environment installs bound
- * copies on the global), so these tests wait on real time — the save
- * debounce is 300 ms.
  */
 import { act } from "react";
 import { createRoot } from "react-dom/client";
@@ -92,10 +88,10 @@ function makeHighlight(id: string, overrides: Partial<Highlight> = {}): Highligh
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** Let the store's 300 ms save debounce fire and the resulting save settle. */
+/** Let queued saves run and settle. */
 async function drainSaves() {
-  await sleep(330);
   await act(async () => {
+    await sleep(0);
     await sleep(0);
   });
 }
@@ -377,8 +373,30 @@ describe("F6: limits are enforced before the mutation", () => {
   });
 });
 
+/** A save mock whose calls hang until released, one at a time, in order. */
+function hangingSaves() {
+  const releases: Array<(ok: boolean) => void> = [];
+  m.saveHighlights.mockImplementation(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        releases.push((ok) => (ok ? resolve() : reject(new Error("disk error"))));
+      }),
+  );
+  return {
+    async release(ok = true) {
+      const r = releases.shift();
+      expect(r).toBeTruthy();
+      r!(ok);
+      await drainSaves();
+    },
+    get pending() {
+      return releases.length;
+    },
+  };
+}
+
 describe("F7: the close flush", () => {
-  it("flush() saves pending paths, awaits in-flight saves, and leaves clean paths alone", async () => {
+  it("flush() saves nothing for clean paths and waits for queued saves", async () => {
     const app = await mount();
     const a1 = makeHighlight("a1");
     const a2 = makeHighlight("a2");
@@ -387,49 +405,44 @@ describe("F7: the close flush", () => {
     await loadFile(app.ctx, B, []); // loaded, empty: no entry
     await loadFile(app.ctx, C, [c1]); // clean: never mutated
 
-    act(() => app.ctx.addHighlight(A, a2)); // A pending; its debounce is pending
-    expect(m.saveHighlights).not.toHaveBeenCalled();
-
-    await act(async () => {
-      await app.ctx.flush();
-    });
-
-    // Only the pending path is saved: a never-mutated path already matches
-    // disk (its bytes are on it), and a path with no list has nothing to
-    // write.
+    const saves = hangingSaves();
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves();
     expect(m.saveHighlights).toHaveBeenCalledTimes(1);
     expect(m.saveHighlights).toHaveBeenCalledWith(A, [a1, a2]);
 
-    // The flush cleared A's debounce timer: nothing more saves after.
+    let flushed = false;
+    const done = app.ctx.flush().then(() => {
+      flushed = true;
+    });
     await drainSaves();
+    expect(flushed).toBe(false); // waits for A's save in flight
+
+    await saves.release();
+    await act(async () => {
+      await done;
+    });
+    expect(flushed).toBe(true);
+    // A's generation was saved; B and C were never mutated: one save total.
     expect(m.saveHighlights).toHaveBeenCalledTimes(1);
     app.unmount();
   });
 
-  it("a close within the 300 ms debounce saves the pending change, then lets the close through", async () => {
+  it("a close right after an edit saves it, then lets the close through", async () => {
     const app = await mount();
     const a1 = makeHighlight("a1");
     const a2 = makeHighlight("a2");
     await loadFile(app.ctx, A, [a1]);
 
-    act(() => app.ctx.addHighlight(A, a2)); // debounce pending
-    expect(m.saveHighlights).not.toHaveBeenCalled();
-
+    act(() => app.ctx.addHighlight(A, a2));
     // Rust intercepted the first close request and emitted the flush request.
     expect(m.flushListeners.length).toBe(1);
     m.flushListeners[0]();
-    await act(async () => {
-      await sleep(0);
-      await sleep(0);
-    });
-
-    expect(m.saveHighlights).toHaveBeenCalledTimes(1); // immediate, not after 300 ms
-    expect(m.saveHighlights).toHaveBeenCalledWith(A, [a1, a2]);
-    expect(m.confirmClose).toHaveBeenCalledTimes(1); // the close is let through
-
-    // The debounce timer was cleared by the flush: no second save.
     await drainSaves();
+
     expect(m.saveHighlights).toHaveBeenCalledTimes(1);
+    expect(m.saveHighlights).toHaveBeenCalledWith(A, [a1, a2]);
+    expect(m.confirmClose).toHaveBeenCalledTimes(1);
     app.unmount();
   });
 
@@ -439,20 +452,17 @@ describe("F7: the close flush", () => {
     const a2 = makeHighlight("a2");
     await loadFile(app.ctx, A, [a1]);
 
-    act(() => app.ctx.addHighlight(A, a2));
-
     m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, a2));
     m.flushListeners[0]();
-    await act(async () => {
-      await sleep(0);
-      await sleep(0);
-    });
+    await drainSaves();
     expect(m.confirmClose).toHaveBeenCalledTimes(1); // not trapped
+    // One notification for the whole failure streak (the edit and the flush).
+    expect(m.notifyApp).toHaveBeenCalledTimes(1);
     expect(m.notifyApp).toHaveBeenCalledWith(
       "Couldn't save highlights for a.md. Will retry on the next change or when you close the window.",
     );
 
-    // The path is still pending: the next mutation saves it.
     m.saveHighlights.mockImplementation(() => Promise.resolve());
     act(() => app.ctx.updateHighlight(A, "a2", { colour: "pink" }));
     await drainSaves();
@@ -462,116 +472,138 @@ describe("F7: the close flush", () => {
     );
     app.unmount();
   });
+});
 
-  it("a mutation on a second path is saved when the first path's save is in flight (F9)", async () => {
+describe("F9/F12: one save queue per path (test oracle)", () => {
+  it("a no-op save never stops later saves (the reviewer's sequence)", async () => {
     const app = await mount();
-    const a1 = makeHighlight("a1");
-    const a2 = makeHighlight("a2");
-    const b1 = makeHighlight("b1");
-    const b2 = makeHighlight("b2");
+    const [a1, a2, a3, a4] = ["a1", "a2", "a3", "a4"].map((id) => makeHighlight(id));
     await loadFile(app.ctx, A, [a1]);
-    await loadFile(app.ctx, B, [b1]);
+    const saves = hangingSaves();
 
-    // A's save hangs; B's resolves.
-    let releaseA: (() => void) | undefined;
-    m.saveHighlights.mockImplementation((path: string) => {
-      if (path === A) return new Promise<void>((r) => (releaseA = r));
-      return Promise.resolve();
-    });
-
-    act(() => app.ctx.addHighlight(A, a2)); // A's writer starts on its debounce
-    await sleep(330);
-    expect(m.saveHighlights).toHaveBeenCalledTimes(1);
-    expect(m.saveHighlights).toHaveBeenLastCalledWith(A, [a1, a2]);
-
-    act(() => app.ctx.addHighlight(B, b2)); // B mutated while A is in flight
-    await sleep(330); // B's debounce fires: its writer runs, independent of A
-    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
-    expect(m.saveHighlights).toHaveBeenLastCalledWith(B, [b1, b2]);
-
-    // A resolves: its writer loops, sees it is clean, and does not re-send.
-    releaseA!();
-    await act(async () => {
-      await sleep(0);
-    });
-    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
-    app.unmount();
-  });
-
-  it("a flush while a save is in flight saves the other path's pending change (F9)", async () => {
-    const app = await mount();
-    const a1 = makeHighlight("a1");
-    const a2 = makeHighlight("a2");
-    const b1 = makeHighlight("b1");
-    const b2 = makeHighlight("b2");
-    await loadFile(app.ctx, A, [a1]);
-    await loadFile(app.ctx, B, [b1]);
-
-    // A's save hangs; B's resolves.
-    let releaseA: (() => void) | undefined;
-    m.saveHighlights.mockImplementation((path: string) => {
-      if (path === A) return new Promise<void>((r) => (releaseA = r));
-      return Promise.resolve();
-    });
-
-    act(() => app.ctx.addHighlight(A, a2));
-    await sleep(330); // A's save hangs in flight
-    expect(m.saveHighlights).toHaveBeenCalledTimes(1);
-
-    act(() => app.ctx.addHighlight(B, b2)); // B pending; its debounce has not fired
-    // The flush awaits A (still in flight), so start it and let B run: B's
-    // writer saves immediately even though the flush has not settled.
-    let flushDone: Promise<void> | undefined;
-    act(() => {
-      flushDone = app.ctx.flush();
-    });
-    await act(async () => {
-      await sleep(0);
-      await sleep(0);
-    });
-    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
-    expect(m.saveHighlights).toHaveBeenLastCalledWith(B, [b1, b2]);
-
-    // A resolves: it was clean once its first save landed, so no re-send.
-    releaseA!();
-    await act(async () => {
-      await flushDone;
-    });
-    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
-    app.unmount();
-  });
-
-  it("a mutation landing while its own save is in flight is re-sent with the newest snapshot (F9)", async () => {
-    const app = await mount();
-    const a1 = makeHighlight("a1");
-    const a2 = makeHighlight("a2");
-    const a3 = makeHighlight("a3");
-    await loadFile(app.ctx, A, [a1]);
-
-    // Every save for A hangs; release them one at a time.
-    let release: (() => void) | undefined;
-    m.saveHighlights.mockImplementation(() => new Promise<void>((r) => (release = r)));
-
-    act(() => app.ctx.addHighlight(A, a2)); // generation 1
-    await sleep(330); // debounce fires: save #1 ([a1, a2]) hangs in flight
-    act(() => app.ctx.addHighlight(A, a3)); // generation 2; the debounce resets
-
-    // The first save lands: the writer loops and re-sends the *current*
-    // snapshot — the stale in-flight one is not the last word.
-    release!();
-    await act(async () => {
-      await sleep(0);
-    });
-    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
+    act(() => app.ctx.addHighlight(A, a2)); // save #1 starts and hangs
+    await drainSaves();
+    act(() => app.ctx.addHighlight(A, a3)); // queued behind #1
+    await saves.release(); // #1 lands; the queued save sends the newest list
     expect(m.saveHighlights).toHaveBeenNthCalledWith(1, A, [a1, a2]);
     expect(m.saveHighlights).toHaveBeenNthCalledWith(2, A, [a1, a2, a3]);
+    await saves.release(); // #2 lands: A is clean
 
-    // The second save lands: the path is clean; no third save.
-    release!();
+    // A clean-path invocation (flush with nothing to do) is a no-op ...
     await act(async () => {
-      await sleep(0);
+      await app.ctx.flush();
     });
     expect(m.saveHighlights).toHaveBeenCalledTimes(2);
+
+    // ... and does not stop the next edit from being saved.
+    act(() => app.ctx.addHighlight(A, a4));
+    await drainSaves();
+    expect(m.saveHighlights).toHaveBeenCalledTimes(3);
+    expect(m.saveHighlights).toHaveBeenLastCalledWith(A, [a1, a2, a3, a4]);
+    await saves.release();
+
+    // A close flush after that has nothing left to send.
+    await act(async () => {
+      await app.ctx.flush();
+    });
+    expect(m.saveHighlights).toHaveBeenCalledTimes(3);
+    app.unmount();
+  });
+
+  it("an edit made during a save is sent once that save lands", async () => {
+    const app = await mount();
+    const [a1, a2, a3] = ["a1", "a2", "a3"].map((id) => makeHighlight(id));
+    await loadFile(app.ctx, A, [a1]);
+    const saves = hangingSaves();
+
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves();
+    act(() => app.ctx.removeHighlight(A, "a1"));
+    act(() => app.ctx.addHighlight(A, a3));
+    expect(m.saveHighlights).toHaveBeenCalledTimes(1); // serialized: one in flight
+
+    await saves.release();
+    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
+    expect(m.saveHighlights).toHaveBeenLastCalledWith(A, [a2, a3]);
+    await saves.release();
+    expect(saves.pending).toBe(0);
+    expect(m.saveHighlights).toHaveBeenCalledTimes(2); // the third queued save had nothing new
+    app.unmount();
+  });
+
+  it("a flush during a save waits for it and sends the newest list", async () => {
+    const app = await mount();
+    const [a1, a2, a3, b1, b2] = ["a1", "a2", "a3", "b1", "b2"].map((id) => makeHighlight(id));
+    await loadFile(app.ctx, A, [a1]);
+    await loadFile(app.ctx, B, [b1]);
+    let releaseA: Array<() => void> = [];
+    m.saveHighlights.mockImplementation((path: string) =>
+      path === A ? new Promise<void>((r) => releaseA.push(r)) : Promise.resolve(),
+    );
+
+    act(() => app.ctx.addHighlight(A, a2)); // A in flight
+    await drainSaves();
+    act(() => app.ctx.addHighlight(A, a3)); // A pending behind it
+    act(() => app.ctx.addHighlight(B, b2)); // B saves independently
+
+    let flushed = false;
+    const done = app.ctx.flush().then(() => {
+      flushed = true;
+    });
+    await drainSaves();
+    expect(m.saveHighlights).toHaveBeenCalledWith(B, [b1, b2]);
+    expect(flushed).toBe(false);
+
+    releaseA.shift()!();
+    await drainSaves();
+    expect(m.saveHighlights).toHaveBeenLastCalledWith(A, [a1, a2, a3]);
+    expect(flushed).toBe(false); // still waiting for that save
+    releaseA.shift()!();
+    await act(async () => {
+      await done;
+    });
+    expect(flushed).toBe(true);
+    releaseA = [];
+    app.unmount();
+  });
+
+  it("a failed save is retried by the next flush", async () => {
+    const app = await mount();
+    const [a1, a2] = ["a1", "a2"].map((id) => makeHighlight(id));
+    await loadFile(app.ctx, A, [a1]);
+    m.saveHighlights.mockImplementationOnce(() => Promise.reject(new Error("disk error")));
+
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves();
+    expect(m.saveHighlights).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await app.ctx.flush();
+    });
+    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
+    expect(m.saveHighlights).toHaveBeenLastCalledWith(A, [a1, a2]);
+    // Clean now: another flush sends nothing.
+    await act(async () => {
+      await app.ctx.flush();
+    });
+    expect(m.saveHighlights).toHaveBeenCalledTimes(2);
+    app.unmount();
+  });
+
+  it("a burst of 50 edits coalesces and ends with the final list on disk", async () => {
+    const app = await mount();
+    await loadFile(app.ctx, A, []);
+    const saves = hangingSaves();
+    const all = Array.from({ length: 50 }, (_, i) => makeHighlight(`h${i}`));
+
+    act(() => app.ctx.addHighlight(A, all[0]));
+    await drainSaves(); // save #1 in flight
+    for (const h of all.slice(1)) act(() => app.ctx.addHighlight(A, h));
+    while (saves.pending > 0) await saves.release();
+
+    const calls = m.saveHighlights.mock.calls;
+    expect(calls.length).toBe(2); // the first edit, then everything queued behind it
+    expect(calls[calls.length - 1]).toEqual([A, all]);
     app.unmount();
   });
 });

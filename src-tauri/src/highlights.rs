@@ -29,6 +29,7 @@
 //! fail-if-exists); every corrupt/invalid backup is 0600 on Unix.
 
 use crate::error::AppResult;
+use anyhow::Context;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -197,7 +198,7 @@ impl HighlightsFile {
                 });
                 let mut truncated = 0;
                 let mut dropped_entries = 0;
-                for (_path, list) in file.files.iter_mut() {
+                for list in file.files.values_mut() {
                     if list.len() > MAX_HIGHLIGHTS_PER_FILE {
                         truncated += list.len() - MAX_HIGHLIGHTS_PER_FILE;
                         list.truncate(MAX_HIGHLIGHTS_PER_FILE);
@@ -221,19 +222,23 @@ impl HighlightsFile {
                 // user's data; the live file stays and is re-filtered on
                 // every subsequent load.
                 if dropped_paths + truncated + dropped_entries > 0 {
-                    match copy_with_suffix(&p, "invalid") {
-                        Ok(backup) => eprintln!(
-                            "marque: highlights: filtered on load ({} invalid entries, {} over \
-                             the per-file cap, {} non-absolute paths); the original was kept \
-                             at {}",
-                            dropped_entries, truncated, dropped_paths, backup.display()
-                        ),
-                        Err(err) => eprintln!(
-                            "marque: highlights: filtered on load but failed to keep a backup \
-                             of {}: {err:#}",
+                    // No backup, no load: a filtered store that could not be
+                    // preserved must never reach a save that would make the
+                    // loss permanent.
+                    let backup = copy_with_suffix(&p, "invalid").with_context(|| {
+                        format!(
+                            "{} holds invalid highlights and could not be backed up",
                             p.display()
-                        ),
-                    }
+                        )
+                    })?;
+                    eprintln!(
+                        "marque: highlights: filtered on load ({} invalid entries, {} over \
+                         the per-file cap, {} non-absolute paths); the original was kept at {}",
+                        dropped_entries,
+                        truncated,
+                        dropped_paths,
+                        backup.display()
+                    );
                 }
                 // Drop paths left empty by the filtering.
                 file.files.retain(|_, list| !list.is_empty());
@@ -350,7 +355,18 @@ fn copy_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
         };
         let candidate = path.with_file_name(label);
         if !candidate.exists() {
-            std::fs::copy(path, &candidate)?;
+            // Create the copy owner-only before any byte lands in it.
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            let mut dest = opts.open(&candidate)?;
+            let mut src = std::fs::File::open(path)?;
+            std::io::copy(&mut src, &mut dest)?;
+            dest.sync_all()?;
             restrict_to_owner(&candidate)?;
             return Ok(candidate);
         }
@@ -565,6 +581,26 @@ fn looks_like_rfc3339(s: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Absolute on every platform: Windows needs a drive prefix, and the
+    /// load filter drops non-absolute keys.
+    #[cfg(windows)]
+    const DOC_A: &str = r"C:\a.md";
+    #[cfg(not(windows))]
+    const DOC_A: &str = "/a.md";
+    #[cfg(windows)]
+    const DOC_ABS: &str = r"C:\abs\doc.md";
+    #[cfg(not(windows))]
+    const DOC_ABS: &str = "/abs/doc.md";
+
+    #[cfg(windows)]
+    fn doc_path(name: &str) -> String {
+        format!(r"C:\{name}")
+    }
+    #[cfg(not(windows))]
+    fn doc_path(name: &str) -> String {
+        format!("/{name}")
+    }
+
     /// A deterministic valid UUID derived from the label, so entries
     /// survive the load-time validation that requires UUID-shaped ids.
     fn id(label: &str) -> String {
@@ -604,7 +640,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut f = HighlightsFile::default();
         f.set(
-            "/a.md".into(),
+            DOC_A.into(),
             vec![
                 h("1", Colour::Yellow, 0, 1),
                 h("2", Colour::Blue, 3, 4),
@@ -613,7 +649,7 @@ mod tests {
         f.save(dir.path()).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        let items = loaded.get("/a.md");
+        let items = loaded.get(DOC_A);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].id, id("1"));
         assert_eq!(items[0].colour, Colour::Yellow);
@@ -627,7 +663,7 @@ mod tests {
         let mut f = HighlightsFile::default();
         let mut item = h("1", Colour::Yellow, 0, 1);
         item.note = Some("needs a primary source".into());
-        f.set("/a.md".into(), vec![item]);
+        f.set(DOC_A.into(), vec![item]);
         f.save(dir.path()).unwrap();
 
         let raw = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
@@ -643,7 +679,7 @@ mod tests {
     fn omits_note_field_in_json_when_absent() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = HighlightsFile::default();
-        f.set("/a.md".into(), vec![h("1", Colour::Yellow, 0, 1)]);
+        f.set(DOC_A.into(), vec![h("1", Colour::Yellow, 0, 1)]);
         f.save(dir.path()).unwrap();
         let raw = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
         assert!(!raw.contains("\"note\""));
@@ -702,7 +738,7 @@ mod tests {
     fn atomic_save_leaves_no_temp_file() {
         let dir = tempfile::tempdir().unwrap();
         let mut f = HighlightsFile::default();
-        f.set("/a.md".into(), vec![h("1", Colour::Yellow, 0, 1)]);
+        f.set(DOC_A.into(), vec![h("1", Colour::Yellow, 0, 1)]);
         f.save(dir.path()).unwrap();
 
         let entries: Vec<String> = std::fs::read_dir(dir.path())
@@ -736,7 +772,7 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let mut f = HighlightsFile::default();
-        f.set("/a.md".into(), vec![item]);
+        f.set(DOC_A.into(), vec![item]);
         f.save(dir.path()).unwrap();
 
         let raw = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
@@ -786,7 +822,7 @@ mod tests {
                     let id = i;
                     HighlightsFile::update_path(
                         &path,
-                        format!("/file-{}.md", id),
+                        doc_path(&format!("file-{}.md", id)),
                         vec![h(&id.to_string(), Colour::Blue, 0, 1)],
                     )
                     .unwrap();
@@ -800,7 +836,7 @@ mod tests {
         let loaded = HighlightsFile::load(dir.path()).unwrap();
         assert_eq!(loaded.files.len(), n);
         for i in 0..n {
-            let items = loaded.get(&format!("/file-{}.md", i));
+            let items = loaded.get(&doc_path(&format!("file-{}.md", i)));
             assert_eq!(items.len(), 1, "path for file-{} was lost", i);
             assert_eq!(items[0].id, id(&i.to_string()));
         }
@@ -809,10 +845,10 @@ mod tests {
     #[test]
     fn set_with_empty_list_removes_the_key() {
         let mut f = HighlightsFile::default();
-        f.set("/a.md".into(), vec![h("1", Colour::Yellow, 0, 1)]);
+        f.set(DOC_A.into(), vec![h("1", Colour::Yellow, 0, 1)]);
         assert_eq!(f.files.len(), 1);
         // Clearing a file's highlights is just setting an empty list.
-        f.set("/a.md".into(), vec![]);
+        f.set(DOC_A.into(), vec![]);
         assert!(f.files.is_empty());
     }
 
@@ -1039,11 +1075,11 @@ mod tests {
         bad.anchor.hash = "nope".into();
         let good = h("3", Colour::Pink, 5, 6);
         let mut file = HighlightsFile::default();
-        file.set("/a.md".into(), vec![bad, good]);
+        file.set(DOC_A.into(), vec![bad, good]);
         file.save(dir.path()).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        let items = loaded.get("/a.md");
+        let items = loaded.get(DOC_A);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, id("3"));
     }
@@ -1054,7 +1090,7 @@ mod tests {
         let mut bad = h("2", Colour::Blue, 3, 4);
         bad.anchor.hash = "nope".into();
         let mut file = HighlightsFile::default();
-        file.set("/a.md".into(), vec![bad]);
+        file.set(DOC_A.into(), vec![bad]);
         file.save(dir.path()).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
@@ -1081,6 +1117,35 @@ mod tests {
         );
     }
 
+    /// A filtered store whose original cannot be preserved is not loaded, so
+    /// no later save can make the loss permanent; the live file is untouched.
+    #[cfg(unix)]
+    #[test]
+    fn load_fails_when_the_invalid_backup_cannot_be_written() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE_NAME);
+        let mut long = h("2", Colour::Blue, 3, 4);
+        long.note = Some("a".repeat(MAX_NOTE_CHARS + 1));
+        let mut file = HighlightsFile::default();
+        file.set(DOC_A.into(), vec![long, h("1", Colour::Yellow, 0, 1)]);
+        file.save(dir.path()).unwrap();
+        let original = std::fs::read_to_string(&path).unwrap();
+
+        // A read-only directory: the backup copy cannot be created.
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
+        let probe = dir.path().join("probe");
+        let writable = std::fs::write(&probe, b"x").is_ok(); // true when running as root
+        let result = HighlightsFile::load(dir.path());
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        if writable {
+            return; // permissions are not enforced for this user; nothing to assert
+        }
+        assert!(result.is_err(), "load must fail when the backup cannot be written");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        assert!(invalid_backups(dir.path()).is_empty());
+    }
+
     #[test]
     fn load_drops_an_over_long_note_and_keeps_the_original_as_an_invalid_backup() {
         let dir = tempfile::tempdir().unwrap();
@@ -1090,12 +1155,12 @@ mod tests {
         let mut long = h("2", Colour::Blue, 3, 4);
         long.note = Some("a".repeat(MAX_NOTE_CHARS + 1)); // one over: dropped
         let mut file = HighlightsFile::default();
-        file.set("/a.md".into(), vec![long, short]);
+        file.set(DOC_A.into(), vec![long, short]);
         file.save(dir.path()).unwrap();
         let original = std::fs::read_to_string(&path).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        let items = loaded.get("/a.md");
+        let items = loaded.get(DOC_A);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].id, id("1"));
         assert_eq!(items[0].note, Some("a".repeat(MAX_NOTE_CHARS)));
@@ -1103,7 +1168,7 @@ mod tests {
         // The live file is left intact (re-filtered on each later load).
         let live: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(live["files"]["/a.md"].as_array().unwrap().len(), 2);
+        assert_eq!(live["files"][DOC_A].as_array().unwrap().len(), 2);
 
         // A single owner-only copy of the original.
         let backups = invalid_backups(dir.path());
@@ -1127,18 +1192,18 @@ mod tests {
             })
             .collect();
         let mut file = HighlightsFile::default();
-        file.set("/a.md".into(), list);
+        file.set(DOC_A.into(), list);
         file.save(dir.path()).unwrap();
         let original = std::fs::read_to_string(&path).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
-        assert_eq!(loaded.get("/a.md").len(), MAX_HIGHLIGHTS_PER_FILE);
+        assert_eq!(loaded.get(DOC_A).len(), MAX_HIGHLIGHTS_PER_FILE);
 
         // The live file is left intact with the un-truncated list.
         let live: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            live["files"]["/a.md"].as_array().unwrap().len(),
+            live["files"][DOC_A].as_array().unwrap().len(),
             MAX_HIGHLIGHTS_PER_FILE + 1
         );
 
@@ -1155,14 +1220,14 @@ mod tests {
         let path = dir.path().join(FILE_NAME);
         let mut file = HighlightsFile::default();
         file.set("relative/doc.md".into(), vec![h("1", Colour::Yellow, 0, 1)]);
-        file.set("/abs/doc.md".into(), vec![h("2", Colour::Blue, 0, 1)]);
+        file.set(DOC_ABS.into(), vec![h("2", Colour::Blue, 0, 1)]);
         file.save(dir.path()).unwrap();
         let original = std::fs::read_to_string(&path).unwrap();
 
         let loaded = HighlightsFile::load(dir.path()).unwrap();
         assert!(!loaded.files.contains_key("relative/doc.md"));
-        assert_eq!(loaded.get("/abs/doc.md").len(), 1);
-        assert_eq!(loaded.get("/abs/doc.md")[0].id, id("2"));
+        assert_eq!(loaded.get(DOC_ABS).len(), 1);
+        assert_eq!(loaded.get(DOC_ABS)[0].id, id("2"));
 
         let backups = invalid_backups(dir.path());
         assert_eq!(backups.len(), 1, "{backups:?}");
