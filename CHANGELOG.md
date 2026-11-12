@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+- macOS: printing a document shown in the dark theme no longer flashes the app to the light theme (and can no longer come back dark once the print sheet is dismissed). Code blocks now render theme-agnostic markup that the print styles force to the light palette, so the app's theme is never touched when printing; the on-screen appearance is unchanged.
+
 ## Hard fork - 2026-08-02
 
 Renamed project from `marky` to `marque`. New home at [superbiche/marque](https://github.com/superbiche/marque) (public since 2026-11). Upstream tracking with `GRVYDEV/marky` has ended.

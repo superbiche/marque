@@ -18,7 +18,6 @@ interface Props {
   onOpenLink: (path: string, fragment?: string) => void;
   fragment?: string;
   onFragmentHandled: () => void;
-  onContentRendered?: (paneId: string) => void;
   /**
    * Report this pane's rendered article (or null when it has none) so the
    * app can target per-pane custom events such as the highlight jump.
@@ -50,7 +49,6 @@ export const Pane = memo(function Pane({
   onOpenLink,
   fragment,
   onFragmentHandled,
-  onContentRendered,
   onArticleChange,
   onResolutionChange,
   onRevealFile,
@@ -73,11 +71,10 @@ export const Pane = memo(function Pane({
 
   const handleRendered = useCallback(() => {
     setContentNonce((nonce) => nonce + 1);
-    onContentRendered?.(pane.id);
     // After every render completion (including theme flips that remount the
     // article) the registry sees this pane's current article node.
     onArticleChangeRef.current?.(pane.id, articleRef.current);
-  }, [onContentRendered, pane.id]);
+  }, [pane.id]);
 
   // No active tab (or pane unmount): report null so the registry doesn't
   // keep pointing at a removed article.

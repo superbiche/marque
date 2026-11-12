@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useReducer, useState, useCallback, useRef } from "react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ThemeProvider, useTheme } from "@/lib/theme";
+import { ThemeProvider } from "@/lib/theme";
 import { PreferencesProvider, usePreferences } from "@/lib/preferences";
 import { ResizeHandle } from "@/components/ResizeHandle";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -52,13 +52,11 @@ marque ./docs/         # open a folder (auto-saved)
 \`\`\`
 `;
 
-// Cap on how long the print flow waits for the light re-render, so a missed
-// render callback can never leave the print button doing nothing.
-const PRINT_RENDER_TIMEOUT_MS = 4000;
-
-function nextFrame(): Promise<void> {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-}
+// window.print() on this webview returns before the print sheet is dismissed
+// (and this webview never fires beforeprint/afterprint), so a re-entry
+// cooldown is the only guard against opening a second sheet from a double
+// ⌘P while the first is still up.
+const PRINT_REENTRY_COOLDOWN_MS = 500;
 
 function AppShell() {
   const [state, dispatch] = useReducer(reduce, undefined, () => createInitialState(WELCOME));
@@ -81,7 +79,6 @@ function AppShell() {
   const sidebarRef = useRef<HTMLDivElement>(null);
   const tabsRef = useRef(state.tabs);
   const activeTabRef = useRef<TabState | undefined>(undefined);
-  const { resolved, setPrintLight } = useTheme();
   const {
     contentZoomIn, contentZoomOut, contentZoomReset,
     sidebarLeftWidth, sidebarRightWidth,
@@ -204,23 +201,10 @@ function AppShell() {
     };
   }, [openFile, refreshFolders]);
 
-  // Print always goes out on the light theme: Shiki and mermaid bake theme
-  // colors into the rendered markup, so a dark document has to be re-rendered
-  // in light before the dialog opens. window.print() blocks until the dialog is
-  // dismissed, and this webview never fires beforeprint/afterprint.
+  // Printing no longer flips the theme: Shiki output is theme-agnostic (CSS
+  // variables, mapped in markdown.css), and the print block forces the light
+  // values, so the sheet can never re-darken behind the dialog.
   const printingRef = useRef(false);
-  const renderWaitersRef = useRef<{ paneId: string; resolve: () => void }[]>([]);
-
-  const handleContentRendered = useCallback((paneId: string) => {
-    // A highlight pass already in flight when we flip resolves while the root is
-    // still dark. Ignoring those keeps us from printing the stale dark markup.
-    if (document.documentElement.classList.contains("dark")) return;
-    renderWaitersRef.current = renderWaitersRef.current.filter((waiter) => {
-      if (waiter.paneId !== paneId) return true;
-      waiter.resolve();
-      return false;
-    });
-  }, []);
 
   const handleArticleChange = useCallback((paneId: string, el: HTMLElement | null) => {
     setArticles((prev) => {
@@ -262,34 +246,18 @@ function AppShell() {
   const handlePrint = useCallback(async () => {
     if (printingRef.current) return;
     printingRef.current = true;
-    const goLight = resolved === "dark";
     try {
-      if (goLight) {
-        const paneId = state.activePaneId;
-        const rendered = new Promise<boolean>((resolve) => {
-          const waiter = { paneId, resolve: () => resolve(true) };
-          renderWaitersRef.current.push(waiter);
-          window.setTimeout(() => {
-            renderWaitersRef.current = renderWaitersRef.current.filter((w) => w !== waiter);
-            resolve(false);
-          }, PRINT_RENDER_TIMEOUT_MS);
-        });
-        setPrintLight(true);
-        if (!(await rendered)) {
-          // Printing whatever is in the DOM at this point could emit raw,
-          // half-highlighted markup — abort visibly instead.
-          notifyApp("Print cancelled: the document did not finish re-rendering for print.");
-          return;
-        }
-      }
-      await nextFrame();
-      await nextFrame();
+      // Nothing to re-render: the document is always print-ready in whatever
+      // theme it is in (see the print block in markdown.css and index.css).
       window.print();
     } finally {
-      if (goLight) setPrintLight(false);
-      printingRef.current = false;
+      // window.print() may return before the sheet is dismissed (macOS), so a
+      // plain immediate reset would let a second ⌘P open a second sheet.
+      window.setTimeout(() => {
+        printingRef.current = false;
+      }, PRINT_REENTRY_COOLDOWN_MS);
     }
-  }, [resolved, setPrintLight, state.activePaneId]);
+  }, []);
 
   // File drop opens as new tab.
   useEffect(() => {
@@ -555,7 +523,6 @@ function AppShell() {
         onOpenLink={openLink}
         fragment={fragment}
         onFragmentHandled={handleFragmentHandled}
-        onContentRendered={handleContentRendered}
         onArticleChange={handleArticleChange}
         onResolutionChange={handleResolutionChange}
         onRevealFile={handleRevealFile}

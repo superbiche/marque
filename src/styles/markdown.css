@@ -109,11 +109,27 @@
   overflow-x: auto;
   background: transparent;
 }
-/* Shiki paints inline color/background on the <pre> and on every token
-   <span> based on the theme passed at render time, so no extra mapping
-   needed here. We just keep padding consistent with our own pre rule. */
+/* Shiki's dual-theme output paints no colour inline: the <pre> and every
+   token <span> only carry --shiki-light-* / --shiki-dark-* variables (see
+   src/lib/highlight.ts), so the active screen theme is chosen here and the
+   print block below forces the light values. A token without a colour of
+   its own inherits the variable from the <pre>, i.e. the block's own
+   palette; the fallback keeps a pre readable if a future Shiki build stops
+   emitting one. */
 .markdown-body pre.shiki { padding: 1rem 1.1rem; }
-.markdown-body pre.shiki code { background: transparent; padding: 0; }
+.markdown-body pre.shiki code { padding: 0; }
+.markdown-body pre.shiki,
+.markdown-body pre.shiki code,
+.markdown-body pre.shiki span {
+  color: var(--shiki-light, inherit);
+  background-color: var(--shiki-light-bg, var(--muted));
+}
+html.dark .markdown-body pre.shiki,
+html.dark .markdown-body pre.shiki code,
+html.dark .markdown-body pre.shiki span {
+  color: var(--shiki-dark, inherit);
+  background-color: var(--shiki-dark-bg, var(--muted));
+}
 
 .markdown-body .copy-code-btn {
   position: absolute;
@@ -263,8 +279,8 @@
     widows: 3;
   }
 
-  /* Shiki paints its palette inline and mermaid bakes it into the SVG; without
-     exact color adjust the browser drops those backgrounds when printing. */
+  /* The Shiki backgrounds and the mermaid palette are the only colours the
+     print must keep; without exact color adjust the browser drops them. */
   .markdown-body pre,
   .markdown-body pre.shiki,
   .markdown-body code:not(pre code),
@@ -273,6 +289,26 @@
   .markdown-body tr:nth-child(2n) td {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+  }
+
+  /* A dark-themed document prints light: the Shiki variables are forced back
+     to the light values, so the sheet can never re-darken after the dialog
+     (issue #49). Later in this file than the screen rules at equal
+     specificity, so it wins under the print media. */
+  html.dark .markdown-body pre.shiki,
+  html.dark .markdown-body pre.shiki code,
+  html.dark .markdown-body pre.shiki span {
+    color: var(--shiki-light, inherit);
+    background-color: var(--shiki-light-bg, var(--muted));
+  }
+
+  /* Mermaid bakes its palette into the SVG (both a <style> block and inline
+     fill/stroke attributes), so no variable or class swap can re-theme a
+     rendered diagram; inverting the dark-rendered diagram is the only
+     synchronous way to print it light. If the print engine drops the filter
+     the diagram prints as rendered (no worse than before this fix). */
+  html.dark .markdown-body .mermaid-block svg {
+    filter: invert(1) hue-rotate(180deg);
   }
 
   /* On screen these scroll horizontally; on paper they have to wrap instead. */
