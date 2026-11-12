@@ -38,7 +38,10 @@ enum ClosePhase {
     /// The frontend acked the flush request; a save is in progress.
     Flushing,
     /// The frontend cancelled (its flush failed). The next close request
-    /// passes through: "close without saving".
+    /// passes through: "close without saving". A new edit accepted in
+    /// this phase re-arms the guard through `rearm_close_guard` (back to
+    /// `Idle`), so a later close flushes those edits instead of
+    /// discarding them.
     DiscardAllowed,
     /// Terminal: destroy has been ordered (`confirm_close`, the 2 s
     /// no-ack fallback, or the 30 s ceiling).
@@ -156,6 +159,19 @@ fn on_destroy_result(phase: ClosePhase, ok: bool) -> ClosePhase {
         ClosePhase::DiscardAllowed
     } else {
         phase
+    }
+}
+
+/// The phase after `rearm_close_guard`: a new edit was accepted after a
+/// cancelled (failed) flush, so `DiscardAllowed` — "the next close passes
+/// through without saving" — must not outlive it: back to `Idle`, where
+/// the next close request intercepts and asks for a fresh flush. A
+/// stale rearm in any other phase is a no-op: it must not disturb an
+/// in-flight cycle or a window that is already closing.
+fn handle_rearm(phase: ClosePhase) -> ClosePhase {
+    match phase {
+        ClosePhase::DiscardAllowed => ClosePhase::Idle,
+        other => other,
     }
 }
 
@@ -375,6 +391,7 @@ pub fn run() {
             commands::ack_close_request,
             commands::confirm_close,
             commands::cancel_close,
+            commands::rearm_close_guard,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -472,6 +489,38 @@ mod close_guard {
         ] {
             assert_eq!(on_destroy_result(phase, false), phase);
         }
+    }
+
+    #[test]
+    fn a_rearm_after_a_failed_flush_restores_protection() {
+        assert_eq!(
+            handle_rearm(ClosePhase::DiscardAllowed),
+            ClosePhase::Idle
+        );
+    }
+
+    #[test]
+    fn a_stale_rearm_is_a_noop() {
+        for phase in [
+            ClosePhase::Idle,
+            ClosePhase::FlushRequested,
+            ClosePhase::Flushing,
+            ClosePhase::Closing,
+        ] {
+            assert_eq!(handle_rearm(phase), phase);
+        }
+    }
+
+    #[test]
+    fn a_close_after_rearm_intercepts_and_requests_a_flush_again() {
+        // The CodeRabbit third-pass regression: `DiscardAllowed` used to
+        // outlive new edits accepted after a cancelled close, so a later
+        // close discarded those edits without a flush. After re-arm the
+        // next close starts a fresh flush cycle.
+        let phase = handle_rearm(ClosePhase::DiscardAllowed);
+        let (action, next) = handle_close_request(phase);
+        assert_eq!(action, CloseAction::Intercept { emit: true });
+        assert_eq!(next, ClosePhase::FlushRequested);
     }
 
     #[test]

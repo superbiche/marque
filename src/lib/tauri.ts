@@ -104,6 +104,15 @@ export const tauri = {
    * real ("close without saving").
    */
   cancelClose: () => invoke<void>("cancel_close"),
+  /**
+   * Re-arm the close guard after new edits were accepted following a
+   * cancelled close: the guard's `DiscardAllowed` phase ("close again
+   * closes for real, without saving") must not outlive those edits —
+   * the store calls this on the first accepted mutation after a
+   * cancelled close, and the backend moves the guard back to `Idle`, so
+   * a later close request intercepts and asks for a fresh flush.
+   */
+  rearmCloseGuard: () => invoke<void>("rearm_close_guard"),
 };
 
 /**

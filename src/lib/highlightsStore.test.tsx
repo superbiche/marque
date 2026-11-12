@@ -46,6 +46,7 @@ const m = vi.hoisted(() => {
     ackCloseRequest: vi.fn(),
     confirmClose: vi.fn(),
     cancelClose: vi.fn(),
+    rearmCloseGuard: vi.fn(),
     notifyApp: vi.fn(),
     onHighlightsFlushRequest: (cb: () => void) => {
       flushListeners.push(cb);
@@ -62,6 +63,7 @@ vi.mock("@/lib/tauri", () => ({
     ackCloseRequest: () => m.ackCloseRequest(),
     confirmClose: () => m.confirmClose(),
     cancelClose: () => m.cancelClose(),
+    rearmCloseGuard: () => m.rearmCloseGuard(),
   },
   onHighlightsFlushRequest: (cb: () => void) => m.onHighlightsFlushRequest(cb),
 }));
@@ -145,6 +147,7 @@ beforeEach(() => {
   m.ackCloseRequest.mockImplementation(() => Promise.resolve());
   m.confirmClose.mockImplementation(() => Promise.resolve());
   m.cancelClose.mockImplementation(() => Promise.resolve());
+  m.rearmCloseGuard.mockImplementation(() => Promise.resolve());
   // The store logs load/save failures; keep the test output clean.
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
@@ -659,6 +662,38 @@ describe("F7: the close flush", () => {
       A,
       expect.arrayContaining([expect.objectContaining({ id: "a2", colour: "pink" })]),
     );
+    app.unmount();
+  });
+
+  it("a mutation after a cancelled close re-arms the guard once; later mutations do not", async () => {
+    const app = await mount();
+    const a1 = makeHighlight("a1");
+    const a2 = makeHighlight("a2");
+    await loadFile(app.ctx, A, [a1]);
+
+    // A close whose flush keeps failing is cancelled (the native guard
+    // moves to DiscardAllowed). The edit that triggered it is *before*
+    // the cancel, so it must not re-arm.
+    m.saveHighlights.mockImplementation(() => Promise.reject(new Error("disk on fire")));
+    act(() => app.ctx.addHighlight(A, a2));
+    await drainSaves();
+    m.flushListeners[0]();
+    await drainSaves();
+    expect(m.cancelClose).toHaveBeenCalledTimes(1);
+    expect(m.rearmCloseGuard).not.toHaveBeenCalled();
+
+    // The first accepted mutation after the cancelled close re-arms
+    // exactly once (the native guard must go back to Idle before the
+    // user closes again, or it would discard this edit).
+    m.saveHighlights.mockImplementation(() => Promise.resolve());
+    act(() => app.ctx.updateHighlight(A, "a2", { colour: "pink" }));
+    await drainSaves();
+    expect(m.rearmCloseGuard).toHaveBeenCalledTimes(1);
+
+    // Later mutations do not re-arm again.
+    act(() => app.ctx.updateHighlight(A, "a2", { colour: "blue" }));
+    await drainSaves();
+    expect(m.rearmCloseGuard).toHaveBeenCalledTimes(1);
     app.unmount();
   });
 });

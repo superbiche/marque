@@ -14,6 +14,27 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 pub struct InitialTargetState(pub Mutex<InitialTarget>);
 
+/// Run a blocking body on the blocking thread pool and await it. Tauri 2
+/// runs synchronous commands on the main thread, where the highlights
+/// commands' file I/O (including the durability `fsync`s) would freeze
+/// window input and close handling on a slow volume. A join failure
+/// (worker panic or cancellation) is mapped to an `AppError` with
+/// context; the error value itself is never echoed — a panic message
+/// could carry values. The RMW/KEY locks are taken inside the blocking
+/// body, so their coverage is unchanged.
+async fn run_blocking<T: Send + 'static>(
+    op: &'static str,
+    body: impl FnOnce() -> AppResult<T> + Send + 'static,
+) -> AppResult<T> {
+    tauri::async_runtime::spawn_blocking(body)
+        .await
+        .map_err(|_e| {
+            AppError::Other(anyhow::anyhow!(
+                "{op}: the blocking worker was cancelled or panicked before returning a result"
+            ))
+        })?
+}
+
 #[tauri::command]
 pub fn get_initial_target(state: State<'_, InitialTargetState>) -> InitialTarget {
     state.0.lock().clone()
@@ -247,68 +268,82 @@ pub struct GetHighlightsResult {
     pub highlights: Vec<Highlight>,
 }
 
+/// The v2 highlights for one document path (empty when none). The load
+/// (file read + the filtering write-back it may trigger + the directory
+/// `fsync`) runs on the blocking pool, not the main thread (see
+/// `run_blocking`).
 #[tauri::command]
-pub fn get_highlights(path: String) -> AppResult<GetHighlightsResult> {
-    if !std::path::Path::new(&path).is_absolute() {
-        return Err(AppError::Invalid(format!(
-            "path must be absolute, got: {path}"
-        )));
-    }
-    let file = HighlightsFile::load(&settings_dir())?;
-    let highlights = file.get(&path).to_vec();
-    Ok(GetHighlightsResult {
-        version: file.version,
-        highlights,
+pub async fn get_highlights(path: String) -> AppResult<GetHighlightsResult> {
+    run_blocking("get_highlights", move || {
+        if !std::path::Path::new(&path).is_absolute() {
+            return Err(AppError::Invalid(format!(
+                "path must be absolute, got: {path}"
+            )));
+        }
+        let file = HighlightsFile::load(&settings_dir())?;
+        let highlights = file.get(&path).to_vec();
+        Ok(GetHighlightsResult {
+            version: file.version,
+            highlights,
+        })
     })
+    .await
 }
 
 /// Replace the highlights for one document path; other paths are untouched.
 /// An empty list removes the key. The file itself stores only references
 /// (line range + normalized-text window + one-way hash) plus the user's
-/// own note — never the selected text.
+/// own note — never the selected text. The save (temp write + `sync_all`
+/// + rename + directory `fsync`) runs on the blocking pool, not the main
+/// thread (see `run_blocking`).
 #[tauri::command]
-pub fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()> {
-    if !std::path::Path::new(&path).is_absolute() {
-        return Err(AppError::Invalid(format!(
-            "path must be absolute, got: {path}"
-        )));
-    }
-    if highlights.len() > MAX_HIGHLIGHTS_PER_FILE {
-        return Err(AppError::Invalid(format!(
-            "at most {MAX_HIGHLIGHTS_PER_FILE} highlights per file, got {}",
-            highlights.len()
-        )));
-    }
-    for (i, h) in highlights.iter().enumerate() {
-        // Structural validation (id, hash shape, ranges, timestamps). The
-        // error names only the category and the entry's position, never
-        // its values — they are attacker-controllable strings.
-        if let Some(problem) = crate::highlights::entry_problem(h) {
+pub async fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()> {
+    run_blocking("save_highlights", move || {
+        if !std::path::Path::new(&path).is_absolute() {
             return Err(AppError::Invalid(format!(
-                "invalid highlight entry #{i}: {problem} (line {}, offset {})",
-                h.anchor.start_line, h.anchor.start_offset
+                "path must be absolute, got: {path}"
             )));
         }
-        if let Some(note) = &h.note {
-            if note.chars().count() > MAX_NOTE_CHARS {
+        if highlights.len() > MAX_HIGHLIGHTS_PER_FILE {
+            return Err(AppError::Invalid(format!(
+                "at most {MAX_HIGHLIGHTS_PER_FILE} highlights per file, got {}",
+                highlights.len()
+            )));
+        }
+        for (i, h) in highlights.iter().enumerate() {
+            // Structural validation (id, hash shape, ranges, timestamps).
+            // The error names only the category and the entry's position,
+            // never its values — they are attacker-controllable strings.
+            if let Some(problem) = crate::highlights::entry_problem(h) {
                 return Err(AppError::Invalid(format!(
-                    "highlight note exceeds {MAX_NOTE_CHARS} characters"
+                    "invalid highlight entry #{i}: {problem} (line {}, offset {})",
+                    h.anchor.start_line, h.anchor.start_offset
                 )));
             }
+            if let Some(note) = &h.note {
+                if note.chars().count() > MAX_NOTE_CHARS {
+                    return Err(AppError::Invalid(format!(
+                        "highlight note exceeds {MAX_NOTE_CHARS} characters"
+                    )));
+                }
+            }
         }
-    }
-    // The read-modify-write is serialized process-wide (see
-    // `HighlightsFile::update_path`) so rapid edits from two panes cannot
-    // lose each other's update.
-    HighlightsFile::update_path(&settings_dir(), path, highlights)
+        // The read-modify-write is serialized process-wide (see
+        // `HighlightsFile::update_path`) so rapid edits from two panes
+        // cannot lose each other's update.
+        HighlightsFile::update_path(&settings_dir(), path, highlights)
+    })
+    .await
 }
 
 /// The per-installation 128-bit SipHash key as 32 lowercase hex
 /// characters. Created on first call at `<settings_dir>/highlights.key`
-/// (mode 0600 on Unix); the key never appears in `highlights.json`.
+/// (mode 0600 on Unix); the key never appears in `highlights.json`. The
+/// key-file access (including its durability `fsync`s) runs on the
+/// blocking pool, not the main thread (see `run_blocking`).
 #[tauri::command]
-pub fn get_highlights_key() -> AppResult<String> {
-    crate::highlights::get_key(&settings_dir())
+pub async fn get_highlights_key() -> AppResult<String> {
+    run_blocking("get_highlights_key", || crate::highlights::get_key(&settings_dir())).await
 }
 
 /// Acknowledgement of a close request: the frontend calls this as soon as
@@ -412,17 +447,36 @@ pub fn cancel_close(app: AppHandle) -> AppResult<()> {
     Ok(())
 }
 
-/// All document paths that currently have at least one highlight, sorted
-/// for a stable UI order.
+/// Re-arm the close guard after new edits were accepted following a
+/// cancelled close: the guard moves `DiscardAllowed` → `Idle`, so the
+/// next close request intercepts and asks for a flush instead of
+/// discarding the new edits without saving. The frontend calls it on the
+/// first accepted mutation after a cancelled close; a stale rearm in any
+/// other phase is a no-op. Synchronous: no I/O.
 #[tauri::command]
-pub fn list_highlighted_paths() -> AppResult<Vec<String>> {
-    let mut paths = HighlightsFile::load(&settings_dir())?
-        .files
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    paths.sort();
-    Ok(paths)
+pub fn rearm_close_guard(app: AppHandle) -> AppResult<()> {
+    if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
+        let mut phase = guard.phase.lock();
+        *phase = crate::handle_rearm(*phase);
+    }
+    Ok(())
+}
+
+/// All document paths that currently have at least one highlight, sorted
+/// for a stable UI order. The load runs on the blocking pool, not the
+/// main thread (see `run_blocking`).
+#[tauri::command]
+pub async fn list_highlighted_paths() -> AppResult<Vec<String>> {
+    run_blocking("list_highlighted_paths", || {
+        let mut paths = HighlightsFile::load(&settings_dir())?
+            .files
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        paths.sort();
+        Ok(paths)
+    })
+    .await
 }
 
 /// Show a file in the system file manager.
