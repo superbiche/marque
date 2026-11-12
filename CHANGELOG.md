@@ -10,12 +10,13 @@ Renamed project from `marky` to `marque`. New home at [superbiche/marque](https:
 
 ## [Unreleased]
 
-### Fixed
-- Command palette: after the query changed, the previous search's file results were still visible and selectable until the new search returned — pressing Enter in that window could open a file that does not match the current query. File results are now shown only when they belong to the current query (actions or "No results." fill the gap), and a response that lands after the user has moved on is dropped.
-
 ### Changed
-- Command palette: the Actions list (theme, zoom, split panes, highlights panel, open file, add folder) is now searchable while you type. A query lists up to five matching actions in an Actions group above the file results and Enter runs the selected one; with an empty query the full list shows in the same order as before. Matching is case-insensitive, ranking prefix and word-start matches before substrings, with subsequence matches as the lowest tier, so "highl" finds "Toggle Highlights Panel" and "dark" finds "Theme: Dark".
-- Command palette: file results now show exactly what the Rust (nucleo) index returns, in nucleo's order. cmdk's built-in filter was left on, which re-ranked the pre-ranked results in JavaScript and could hide matches the Rust index had found.
+- Command palette: actions (theme, zoom, split panes, highlights panel, open file, add folder) are searchable while you type. Up to five matching actions show above the file results and Enter runs the selected one; with an empty query the full list shows as before. "highl" finds "Toggle Highlights Panel", "dark" finds "Theme: Dark".
+- Command palette: file results show exactly what the Rust (nucleo) index returns, in its order; the palette no longer re-ranks them in JavaScript.
+
+### Fixed
+- Printing from the dark theme no longer switches the app theme around the print call: print styles force the light theme, code blocks included. On macOS, where the print sheet opens without telling the app when it closes, the theme could come back dark before the page was captured. A second ⌘P while a print sheet is open no longer opens another sheet.
+- Bold, italic and underlined text inside a code block (for example a markdown fence showing `**bold**`) keeps its styling on screen and in print.
 
 ## [0.4.11] - 2026-11-12
 

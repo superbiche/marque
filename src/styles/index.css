@@ -199,4 +199,32 @@
   .pane-root {
     box-shadow: none !important;
   }
+
+  /* A dark-themed document prints light: the tokens are forced to their
+     light values (the :root set above). `html.dark` beats the `.dark` set
+     on specificity, and the body background stays white, so every token-
+     driven surface in the printed page is the light one. Chart tokens are
+     identical in both themes and the sidebar is hidden in print, so they
+     are left alone. */
+  html.dark {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.145 0 0);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.145 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.145 0 0);
+    --primary: oklch(0.496 0.265 301.924);
+    --primary-foreground: oklch(0.977 0.014 308.299);
+    --secondary: oklch(0.967 0.001 286.375);
+    --secondary-foreground: oklch(0.21 0.006 285.885);
+    --muted: oklch(0.97 0 0);
+    --muted-foreground: oklch(0.556 0 0);
+    --accent: oklch(0.97 0 0);
+    --accent-foreground: oklch(0.205 0 0);
+    --destructive: oklch(0.577 0.245 27.325);
+    --destructive-foreground: oklch(0.985 0 0);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.922 0 0);
+    --ring: oklch(0.708 0 0);
+  }
 }

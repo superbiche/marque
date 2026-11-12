@@ -214,7 +214,7 @@ export const Viewer = React.memo(function Viewer({
         const lang = match?.[1];
         const text = code.textContent || "";
         try {
-          const highlighted = await highlightCode(text, lang, resolved);
+          const highlighted = await highlightCode(text, lang);
           if (cancelled) return;
           const pre = code.parentElement;
           if (!pre || !pre.isConnected) continue;

@@ -88,6 +88,15 @@ const LANGUAGE_LOADERS: Record<string, LanguageLoader> = {
 
 let promise: Promise<HighlighterCore> | null = null;
 
+// The two themes Shiki emits as CSS variables in the dual-theme output.
+// `codeToHtml` is called with `defaultColor: false`, so the markup carries no
+// inline color/background: every colour is a `--shiki-light-*` /
+// `--shiki-dark-*` custom property that `src/styles/markdown.css` maps onto
+// `color`/`background-color` per screen theme, and forces back to the light
+// values when printing (issue #49).
+export const SHIKI_LIGHT_THEME = "github-light";
+export const SHIKI_DARK_THEME = "github-dark";
+
 export function getHighlighter(): Promise<HighlighterCore> {
   if (!promise) {
     const attempt = createHighlighterCore({
@@ -106,21 +115,22 @@ export function getHighlighter(): Promise<HighlighterCore> {
   return promise;
 }
 
+// One render serves both themes: `codeToHtml` emits `--shiki-light` /
+// `--shiki-dark` (and `-bg`) variables instead of inline colours, so the
+// screen theme is chosen purely in CSS. A theme flip therefore re-renders
+// nothing, and printing never needs to re-render in light.
 export async function highlightCode(
   code: string,
-  lang: string | undefined,
-  theme: "light" | "dark" = "dark"
+  lang: string | undefined
 ): Promise<string> {
   const hl = await getHighlighter();
+  const themes = { light: SHIKI_LIGHT_THEME, dark: SHIKI_DARK_THEME };
   const loaded = hl.getLoadedLanguages();
   let resolvedLang = lang && loaded.includes(lang) ? lang : "";
   if (lang && !resolvedLang) {
     const loader = LANGUAGE_LOADERS[lang];
     if (!loader) {
-      return hl.codeToHtml(code, {
-        lang: "text",
-        theme: theme === "dark" ? "github-dark" : "github-light",
-      });
+      return hl.codeToHtml(code, { lang: "text", themes, defaultColor: false });
     }
     try {
       await hl.loadLanguage(loader);
@@ -131,6 +141,7 @@ export async function highlightCode(
   }
   return hl.codeToHtml(code, {
     lang: resolvedLang || "text",
-    theme: theme === "dark" ? "github-dark" : "github-light",
+    themes,
+    defaultColor: false,
   });
 }
