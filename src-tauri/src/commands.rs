@@ -345,7 +345,16 @@ pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
                 d
             };
             if destroy {
-                let _ = window.destroy();
+                // A failed destroy must not leave the window trapped in
+                // `Closing` (no timer acts from that phase): log the
+                // failure without values and let the next close request
+                // pass through (`on_destroy_result` moves the phase to
+                // `DiscardAllowed`).
+                if window.destroy().is_err() {
+                    eprintln!("marque: could not destroy the main window (30 s ceiling)");
+                    let mut phase = guard.phase.lock();
+                    *phase = crate::on_destroy_result(*phase, false);
+                }
             }
         });
     }
@@ -357,14 +366,17 @@ pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
 /// honored only from an in-flight flush (`Flushing`, or a
 /// protocol-violating `FlushRequested` where the ack was skipped) — a
 /// confirm after a failed (cancelled) flush, or a stray confirm from
-/// anywhere else, does not close the window. It must only be called by
-/// our own webview.
+/// anywhere else, does not close the window. If the destroy call itself
+/// fails, the guard moves to `DiscardAllowed`, so the next close
+/// request passes through — a failed destroy must not leave the window
+/// uncloseable. It must only be called by our own webview.
 #[tauri::command]
 pub fn confirm_close(app: AppHandle) -> AppResult<()> {
+    let guard = match app.try_state::<Arc<crate::CloseGuard>>() {
+        Some(g) => g,
+        None => return Ok(()),
+    };
     let destroy = {
-        let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() else {
-            return Ok(());
-        };
         let mut phase = guard.phase.lock();
         let (next, d) = crate::handle_confirm(*phase);
         *phase = next;
@@ -374,9 +386,15 @@ pub fn confirm_close(app: AppHandle) -> AppResult<()> {
         let Some(window) = app.get_webview_window("main") else {
             return Ok(());
         };
-        window
-            .destroy()
-            .map_err(|e| AppError::Other(anyhow::anyhow!("destroying the main window: {e}")))?;
+        // A failed destroy must not leave the window trapped in
+        // `Closing` (no timer acts from that phase): log the failure
+        // without values and let the next close request pass through
+        // (`on_destroy_result` moves the phase to `DiscardAllowed`).
+        if window.destroy().is_err() {
+            eprintln!("marque: could not destroy the main window (confirm close)");
+            let mut phase = guard.phase.lock();
+            *phase = crate::on_destroy_result(*phase, false);
+        }
     }
     Ok(())
 }

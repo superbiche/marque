@@ -75,8 +75,12 @@ enum FlushTimer {
 /// A close while `FlushRequested` or `Flushing` is intercepted again —
 /// the in-flight save must not be lost by a second close (the old guard
 /// passed a second close through once any close had been attempted,
-/// which destroyed the window mid-save). Only `DiscardAllowed` (a failed
-/// flush) lets a close through.
+/// which destroyed the window mid-save). `DiscardAllowed` (a failed
+/// flush) lets a close through: "close without saving". `Closing` also
+/// passes — a failed `window.destroy()` leaves the window alive in
+/// `Closing` and no timer ever acts from there, so only a further OS
+/// close (the platform's own destruction attempt) can get out of it;
+/// the `on_destroy_result` recovery handles that.
 fn handle_close_request(phase: ClosePhase) -> (CloseAction, ClosePhase) {
     match phase {
         ClosePhase::Idle => (
@@ -86,8 +90,7 @@ fn handle_close_request(phase: ClosePhase) -> (CloseAction, ClosePhase) {
         ClosePhase::FlushRequested | ClosePhase::Flushing => {
             (CloseAction::Intercept { emit: false }, phase)
         }
-        ClosePhase::DiscardAllowed => (CloseAction::Pass, ClosePhase::DiscardAllowed),
-        ClosePhase::Closing => (CloseAction::Intercept { emit: false }, ClosePhase::Closing),
+        ClosePhase::DiscardAllowed | ClosePhase::Closing => (CloseAction::Pass, phase),
     }
 }
 
@@ -137,6 +140,22 @@ fn handle_cancel(phase: ClosePhase) -> ClosePhase {
     match phase {
         ClosePhase::FlushRequested | ClosePhase::Flushing => ClosePhase::DiscardAllowed,
         other => other,
+    }
+}
+
+/// The phase after a `window.destroy()` attempt in `phase`. A success
+/// leaves the phase alone (the window is gone; no further transition
+/// matters). A failure out of `Closing` moves to `DiscardAllowed`, so
+/// the next close request passes through instead of being trapped
+/// behind an un-destroyed window (a failed destroy must not leave the
+/// window uncloseable — "close without saving" recovers it). A failure
+/// from any other phase is a no-op: destroy is only ever ordered from
+/// `Closing`.
+fn on_destroy_result(phase: ClosePhase, ok: bool) -> ClosePhase {
+    if !ok && phase == ClosePhase::Closing {
+        ClosePhase::DiscardAllowed
+    } else {
+        phase
     }
 }
 
@@ -266,7 +285,19 @@ pub fn run() {
                             d
                         };
                         if destroy {
-                            let _ = window.destroy();
+                            // A failed destroy must not leave the window
+                            // trapped in `Closing` (no timer acts from
+                            // that phase): log the failure without
+                            // values and let the next close request
+                            // pass through (`on_destroy_result` moves
+                            // the phase to `DiscardAllowed`).
+                            if window.destroy().is_err() {
+                                eprintln!(
+                                    "marque: could not destroy the main window (2 s no-ack fallback)"
+                                );
+                                let mut phase = guard.phase.lock();
+                                *phase = on_destroy_result(*phase, false);
+                            }
                         }
                     });
                 }
@@ -402,10 +433,45 @@ mod close_guard {
     }
 
     #[test]
-    fn a_close_while_closing_is_intercepted() {
+    fn a_close_while_closing_passes_through() {
+        // The reviewer-blocked regression: a failed `window.destroy()`
+        // used to leave the phase stuck in `Closing`, where every timer
+        // is a no-op and the next close request was intercepted — the
+        // window could never be closed again. Letting the request
+        // through (the OS close then proceeds normally) is the recovery.
         let (action, next) = handle_close_request(ClosePhase::Closing);
-        assert_eq!(action, CloseAction::Intercept { emit: false });
+        assert_eq!(action, CloseAction::Pass);
         assert_eq!(next, ClosePhase::Closing);
+    }
+
+    #[test]
+    fn a_failed_destroy_while_closing_allows_the_next_close() {
+        assert_eq!(
+            on_destroy_result(ClosePhase::Closing, false),
+            ClosePhase::DiscardAllowed
+        );
+    }
+
+    #[test]
+    fn a_succeeded_destroy_leaves_the_phase_alone() {
+        assert_eq!(
+            on_destroy_result(ClosePhase::Closing, true),
+            ClosePhase::Closing
+        );
+    }
+
+    #[test]
+    fn a_failed_destroy_outside_closing_is_a_noop() {
+        // Destroy is only ever ordered from `Closing`; a failure from
+        // any other phase is a no-op.
+        for phase in [
+            ClosePhase::Idle,
+            ClosePhase::FlushRequested,
+            ClosePhase::Flushing,
+            ClosePhase::DiscardAllowed,
+        ] {
+            assert_eq!(on_destroy_result(phase, false), phase);
+        }
     }
 
     #[test]

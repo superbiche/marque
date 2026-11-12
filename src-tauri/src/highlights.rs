@@ -289,9 +289,12 @@ impl HighlightsFile {
     /// Atomic write: serialize to a temp file in the same directory, then
     /// rename over the target. The temp file is created 0600 on Unix so
     /// the live file — which holds notes — is owner-only like its backups.
-    /// Durability: the temp is `sync_all`-ed before the rename and the
-    /// containing directory is fsynced after it (Unix), so a power loss
-    /// cannot leave a renamed-but-unsynced live file or a lost file entry.
+    /// Durability: the temp is `sync_all`-ed before the rename, so a
+    /// crash cannot leave a renamed-but-unsynced live file; the
+    /// containing directory is then fsynced (Unix), and a genuine
+    /// directory-sync failure is a propagated error (the replacement
+    /// happened, but its durability is uncertain) — a power-loss risk on
+    /// the directory entry is never reported as a successful save.
     pub fn save(&self, dir: &Path) -> AppResult<()> {
         std::fs::create_dir_all(dir).with_context(|| {
             format!("creating highlights directory {}", dir.display())
@@ -333,8 +336,11 @@ impl HighlightsFile {
             )
         })?;
         // A rename only updates a directory entry: syncing the directory
-        // makes the new live file survive a power loss.
-        fsync_dir(dir);
+        // makes the new live file survive a power loss. A genuine sync
+        // failure is an error: the replacement happened, but its
+        // durability is uncertain, and the caller must not report it as
+        // durably landed.
+        fsync_dir(dir)?;
         Ok(())
     }
 
@@ -390,36 +396,56 @@ fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Fsync the directory itself so a rename (or a new entry) in it survives
-/// a power loss. Best effort, and never fails the save: the file's bytes
-/// were already `sync_all`-ed, so a refused directory fsync risks only the
-/// directory entry, not the data. Filesystems that cannot sync a directory
-/// refuse with EINVAL (22 on Linux and macOS) or an unsupported operation
-/// (`ErrorKind::Unsupported`: ENOSYS/EOPNOTSUPP); those are ignored. A real
-/// I/O error is logged and the save completes.
+/// Whether a directory `fsync` failure is one of the explicitly
+/// unsupported cases that must be ignored: `EINVAL` (22 on Linux and
+/// macOS — the classic "fsync(2) on a directory" refusal) or
+/// `ErrorKind::Unsupported` (std's mapping for ENOSYS/EOPNOTSUPP/ENOTSUP
+/// and their Windows equivalents). Every other `io::Error` means the
+/// directory was not synced. Only consulted on Unix: off-Unix
+/// `fsync_dir` is a no-op.
+fn is_ignorable_dir_sync_error(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    if e.raw_os_error() == Some(22) {
+        return true;
+    }
+    e.kind() == std::io::ErrorKind::Unsupported
+}
+
+/// Fsync the directory itself so a rename (or a new entry) in it
+/// survives a power loss. The caller has already `sync_all`-ed the file
+/// itself, so a failure here risks the directory entry (a power loss may
+/// lose the replacement), not the data. A genuine failure is therefore a
+/// propagated error saying the replacement happened but its durability
+/// is uncertain — never a silent success. Only an explicitly
+/// unsupported case (EINVAL or `ErrorKind::Unsupported`) is ignored.
 #[cfg(unix)]
-fn fsync_dir(dir: &Path) {
-    use std::io::ErrorKind;
+fn fsync_dir(dir: &Path) -> AppResult<()> {
     let result = std::fs::OpenOptions::new()
         .read(true)
         .open(dir)
         .and_then(|d| d.sync_all());
     if let Err(e) = result {
-        let expected = e.raw_os_error() == Some(22) || e.kind() == ErrorKind::Unsupported;
-        if !expected {
-            eprintln!(
-                "marque: highlights: could not sync directory {}: {e} (the file itself was \
-                 synced; only the directory entry may not be durable)",
-                dir.display()
-            );
+        if !is_ignorable_dir_sync_error(&e) {
+            // A genuine failure: the replacement has already happened,
+            // but its durability is uncertain — a propagated error,
+            // never a silent success.
+            return Err(e).with_context(|| {
+                format!(
+                    "syncing directory {}: the replacement happened but its durability is uncertain",
+                    dir.display()
+                )
+            })?;
         }
     }
+    Ok(())
 }
 
 /// Off-Unix there is no portable directory fsync; the file-level
 /// `sync_all` in each write path is the durability contract.
 #[cfg(not(unix))]
-fn fsync_dir(_dir: &Path) {}
+fn fsync_dir(_dir: &Path) -> AppResult<()> {
+    Ok(())
+}
 
 fn preserve_corrupt(path: &Path) -> AppResult<PathBuf> {
     preserve_with_suffix(path, "corrupt")
@@ -445,9 +471,11 @@ fn preserve_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
             std::fs::rename(path, &candidate)?;
             restrict_to_owner(&candidate)?;
             // The rename only updates a directory entry: sync the
-            // directory so the backup survives a power loss.
+            // directory so the backup survives a power loss. A genuine
+            // sync failure fails the whole backup (the move happened,
+            // but its durability is uncertain).
             if let Some(dir) = path.parent() {
-                fsync_dir(dir);
+                fsync_dir(dir)?;
             }
             return Ok(candidate);
         }
@@ -488,9 +516,11 @@ fn copy_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
             dest.sync_all()?;
             restrict_to_owner(&candidate)?;
             // The copy created a new directory entry: sync the directory
-            // so the backup survives a power loss.
+            // so the backup survives a power loss. A genuine sync
+            // failure fails the whole backup (the copy happened, but its
+            // durability is uncertain).
             if let Some(dir) = path.parent() {
-                fsync_dir(dir);
+                fsync_dir(dir)?;
             }
             return Ok(candidate);
         }
@@ -562,8 +592,9 @@ pub fn get_key(dir: &Path) -> AppResult<String> {
     file.write_all(key.as_bytes())
         .with_context(|| format!("writing key temp file {}", tmp.display()))?;
     // Same durability contract as `save`: sync the key temp before the
-    // rename, and the directory after it. Drop the handle before the
-    // rename — on Windows an open handle on the source can block a
+    // rename, and the directory after it (a genuine directory-sync
+    // failure is a propagated error). Drop the handle before the rename
+    // — on Windows an open handle on the source can block a
     // replace-rename.
     file.sync_all()
         .with_context(|| format!("syncing key temp file {}", tmp.display()))?;
@@ -575,7 +606,9 @@ pub fn get_key(dir: &Path) -> AppResult<String> {
             path.display()
         )
     })?;
-    fsync_dir(dir);
+    // A genuine directory-sync failure fails the whole key creation:
+    // the replacement happened, but its durability is uncertain.
+    fsync_dir(dir)?;
     Ok(key)
 }
 
@@ -627,9 +660,13 @@ fn preserve_corrupt_key(path: &Path) -> AppResult<Option<PathBuf>> {
             // propagates instead of being swallowed.
             restrict_to_owner(&candidate)?;
             // The rename only updates a directory entry: sync the
-            // directory so the backup survives a power loss.
+            // directory so the backup survives a power loss. A genuine
+            // sync failure fails the whole backup (the move happened,
+            // but its durability is uncertain) — which, on the load
+            // path, fails the load before the filtered rewrite, as for
+            // any backup failure.
             if let Some(dir) = path.parent() {
-                fsync_dir(dir);
+                fsync_dir(dir)?;
             }
             return Ok(Some(candidate));
         }
@@ -1532,5 +1569,33 @@ mod tests {
             e.ok()
                 .is_some_and(|e| e.file_name().to_string_lossy().starts_with("highlights.json.corrupt-"))
         }));
+    }
+
+    #[test]
+    fn dir_sync_error_classification_ignores_only_explicitly_unsupported_cases() {
+        use std::io::ErrorKind;
+        // EINVAL (22 on Linux and macOS): the classic "fsync(2) on a
+        // directory is unsupported" answer. (Only meaningful on Unix;
+        // the raw number is the contract, checked before any kind
+        // mapping.)
+        #[cfg(unix)]
+        assert!(is_ignorable_dir_sync_error(&std::io::Error::from_raw_os_error(22)));
+        // `ErrorKind::Unsupported`: std maps ENOSYS/EOPNOTSUPP/ENOTSUP
+        // (and the Windows equivalents) to it.
+        assert!(is_ignorable_dir_sync_error(&std::io::Error::from(ErrorKind::Unsupported)));
+        // A genuine I/O failure is never ignorable: the directory was
+        // not synced and the replacement's durability is uncertain, so
+        // the caller must report the write as not durably landed.
+        for kind in [
+            ErrorKind::Other,
+            ErrorKind::PermissionDenied,
+            ErrorKind::NotFound,
+            ErrorKind::Interrupted,
+        ] {
+            assert!(
+                !is_ignorable_dir_sync_error(&std::io::Error::from(kind)),
+                "{kind:?} must not be ignored"
+            );
+        }
     }
 }
