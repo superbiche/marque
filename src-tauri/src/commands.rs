@@ -1,6 +1,7 @@
 use crate::cli::InitialTarget;
 use crate::error::{AppError, AppResult};
 use crate::folder::TreeNode;
+use crate::highlights::{Highlight, LegacyHighlightsFile, HighlightsFile};
 use crate::registry::SharedRegistry;
 use crate::search::{search, SearchResult};
 use crate::settings::{settings_dir, Folder, SettingsLoadStatus};
@@ -236,6 +237,85 @@ pub fn get_settings_load_status(
     status: State<'_, SettingsLoadStatus>,
 ) -> SettingsLoadStatus {
     (*status).clone()
+}
+
+// Limits kept in one place; the frontend mirrors them in
+// `src/lib/highlights.ts` for early UI feedback.
+pub const MAX_HIGHLIGHTS_PER_FILE: usize = 2000;
+pub const MAX_NOTE_CHARS: usize = 4_000;
+
+/// The highlights for one document, plus a parsed legacy v1 file when the
+/// on-disk store predates the v2 reference-only model. The frontend migrates
+/// v1 content (computing the one-way passage hash) and saves it back as v2.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetHighlightsResult {
+    pub version: u32,
+    pub highlights: Vec<Highlight>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legacy: Option<LegacyHighlightsFile>,
+}
+
+#[tauri::command]
+pub fn get_highlights(path: String) -> AppResult<GetHighlightsResult> {
+    if !std::path::Path::new(&path).is_absolute() {
+        return Err(AppError::Invalid(format!(
+            "path must be absolute, got: {path}"
+        )));
+    }
+    let loaded = HighlightsFile::load(&settings_dir())?;
+    let highlights = loaded.file.get(&path).to_vec();
+    Ok(GetHighlightsResult {
+        version: loaded.file.version,
+        highlights,
+        legacy: loaded.legacy,
+    })
+}
+
+/// Replace the highlights for one document path; other paths are untouched.
+/// An empty list removes the key. The file itself stores only references
+/// (line range + normalized-text window + one-way hash) plus the user's
+/// own note — never the selected text.
+#[tauri::command]
+pub fn save_highlights(path: String, highlights: Vec<Highlight>) -> AppResult<()> {
+    if !std::path::Path::new(&path).is_absolute() {
+        return Err(AppError::Invalid(format!(
+            "path must be absolute, got: {path}"
+        )));
+    }
+    if highlights.len() > MAX_HIGHLIGHTS_PER_FILE {
+        return Err(AppError::Invalid(format!(
+            "at most {MAX_HIGHLIGHTS_PER_FILE} highlights per file, got {}",
+            highlights.len()
+        )));
+    }
+    for h in &highlights {
+        if let Some(note) = &h.note {
+            if note.chars().count() > MAX_NOTE_CHARS {
+                return Err(AppError::Invalid(format!(
+                    "highlight note exceeds {MAX_NOTE_CHARS} characters"
+                )));
+            }
+        }
+    }
+    let dir = settings_dir();
+    let mut file = HighlightsFile::load(&dir)?.file;
+    file.set(path, highlights);
+    file.save(&dir)
+}
+
+/// All document paths that currently have at least one highlight, sorted
+/// for a stable UI order.
+#[tauri::command]
+pub fn list_highlighted_paths() -> AppResult<Vec<String>> {
+    let mut paths = HighlightsFile::load(&settings_dir())?
+        .file
+        .files
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    paths.sort();
+    Ok(paths)
 }
 
 /// Show a file in the system file manager.

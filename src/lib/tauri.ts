@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Highlight, LegacyHighlightsFile } from "./highlights";
 
 export type InitialTarget =
   | { kind: "file"; path: string }
@@ -73,7 +74,24 @@ export const tauri = {
   loadPreferences: () => invoke<PreferencesPayload>("load_preferences"),
   getSettingsLoadStatus: () => invoke<SettingsLoadStatus>("get_settings_load_status"),
   revealInFileManager: (path: string) => invoke<void>("reveal_in_file_manager", { path }),
+  getHighlights: (path: string) => invoke<GetHighlightsResult>("get_highlights", { path }),
+  saveHighlights: (path: string, highlights: Highlight[]) =>
+    invoke<void>("save_highlights", { path, highlights }),
+  listHighlightedPaths: () => invoke<string[]>("list_highlighted_paths"),
 };
+
+/**
+ * Result of `get_highlights`: the v2 highlights for one document path, plus
+ * the parsed legacy v1 file (upstream marky shape) when the on-disk store
+ * predates the v2 reference-only model. Migrate it with
+ * `migrateLegacyFile` and save it back; the backend preserves the original
+ * v1 file and discards its passage text on the next save.
+ */
+export interface GetHighlightsResult {
+  version: number;
+  highlights: Highlight[];
+  legacy?: LegacyHighlightsFile;
+}
 
 export interface PreferencesPayload {
   zoom: number | null;
