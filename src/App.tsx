@@ -202,11 +202,13 @@ function AppShell() {
   //
   // Print re-entry guard (src/lib/printGuard): arming is synchronous before
   // window.print() runs, so a second ⌘P while a sheet/dialog is up is dropped.
-  // It releases on the first completion signal — afterprint (native path),
-  // focus (the dialog is a separate modal window), or visibility (full-screen
-  // preview) — and, on macOS where none of those fire, on its bounded
-  // fallback. The guard is a stable singleton; the completion listeners below
-  // only ever call release(), which is idempotent.
+  // It releases on the first completion signal — afterprint, focus (the sheet
+  // closes and the window regains focus; confirmed to fire on macOS), or
+  // visibility. As a backstop it re-checks focus every 2 s, releasing only once
+  // the window has focus again (so a sheet left open stays guarded), and it
+  // releases unconditionally after 10 min so it can never stick. The guard is a
+  // stable singleton; the completion listeners below only ever call release(),
+  // which is idempotent.
   const printGuardRef = useRef<PrintGuard | null>(null);
   if (printGuardRef.current === null) printGuardRef.current = createPrintGuard();
   const printGuard = printGuardRef.current;
