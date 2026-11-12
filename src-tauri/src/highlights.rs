@@ -289,28 +289,52 @@ impl HighlightsFile {
     /// Atomic write: serialize to a temp file in the same directory, then
     /// rename over the target. The temp file is created 0600 on Unix so
     /// the live file — which holds notes — is owner-only like its backups.
+    /// Durability: the temp is `sync_all`-ed before the rename and the
+    /// containing directory is fsynced after it (Unix), so a power loss
+    /// cannot leave a renamed-but-unsynced live file or a lost file entry.
     pub fn save(&self, dir: &Path) -> AppResult<()> {
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir).with_context(|| {
+            format!("creating highlights directory {}", dir.display())
+        })?;
         let _guard = SAVE_LOCK.lock();
         let p = dir.join(FILE_NAME);
         let tmp = dir.join(format!("{FILE_NAME}.tmp.{}", std::process::id()));
-        let raw = serde_json::to_string_pretty(self)?;
+        let raw =
+            serde_json::to_string_pretty(self).context("serializing the highlights store")?;
         // A stale temp from a crashed earlier save is replaced, not
-        // appended to.
+        // appended to; `create_new` then fails if it is recreated in
+        // between.
         let _ = std::fs::remove_file(&tmp);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true);
+        opts.create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&tmp)?;
-            f.write_all(raw.as_bytes())?;
+            opts.mode(0o600);
         }
-        #[cfg(not(unix))]
-        std::fs::write(&tmp, raw)?;
-        std::fs::rename(&tmp, &p)?;
+        let mut f = opts
+            .open(&tmp)
+            .with_context(|| format!("opening temp file {}", tmp.display()))?;
+        f.write_all(raw.as_bytes())
+            .with_context(|| format!("writing temp file {}", tmp.display()))?;
+        // Sync the temp before the rename: a crash must not leave a
+        // renamed-but-unwritten live file. Drop the handle before the
+        // rename — on Windows an open handle on the source can block a
+        // replace-rename.
+        f.sync_all()
+            .with_context(|| format!("syncing temp file {}", tmp.display()))?;
+        drop(f);
+        std::fs::rename(&tmp, &p).with_context(|| {
+            format!(
+                "renaming temp file {} over {}",
+                tmp.display(),
+                p.display()
+            )
+        })?;
+        // A rename only updates a directory entry: syncing the directory
+        // makes the new live file survive a power loss.
+        fsync_dir(dir);
         Ok(())
     }
 
@@ -366,6 +390,37 @@ fn restrict_to_owner(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Fsync the directory itself so a rename (or a new entry) in it survives
+/// a power loss. Best effort, and never fails the save: the file's bytes
+/// were already `sync_all`-ed, so a refused directory fsync risks only the
+/// directory entry, not the data. Filesystems that cannot sync a directory
+/// refuse with EINVAL (22 on Linux and macOS) or an unsupported operation
+/// (`ErrorKind::Unsupported`: ENOSYS/EOPNOTSUPP); those are ignored. A real
+/// I/O error is logged and the save completes.
+#[cfg(unix)]
+fn fsync_dir(dir: &Path) {
+    use std::io::ErrorKind;
+    let result = std::fs::OpenOptions::new()
+        .read(true)
+        .open(dir)
+        .and_then(|d| d.sync_all());
+    if let Err(e) = result {
+        let expected = e.raw_os_error() == Some(22) || e.kind() == ErrorKind::Unsupported;
+        if !expected {
+            eprintln!(
+                "marque: highlights: could not sync directory {}: {e} (the file itself was \
+                 synced; only the directory entry may not be durable)",
+                dir.display()
+            );
+        }
+    }
+}
+
+/// Off-Unix there is no portable directory fsync; the file-level
+/// `sync_all` in each write path is the durability contract.
+#[cfg(not(unix))]
+fn fsync_dir(_dir: &Path) {}
+
 fn preserve_corrupt(path: &Path) -> AppResult<PathBuf> {
     preserve_with_suffix(path, "corrupt")
 }
@@ -389,6 +444,11 @@ fn preserve_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
         if !candidate.exists() {
             std::fs::rename(path, &candidate)?;
             restrict_to_owner(&candidate)?;
+            // The rename only updates a directory entry: sync the
+            // directory so the backup survives a power loss.
+            if let Some(dir) = path.parent() {
+                fsync_dir(dir);
+            }
             return Ok(candidate);
         }
         trial += 1;
@@ -427,6 +487,11 @@ fn copy_with_suffix(path: &Path, suffix: &str) -> AppResult<PathBuf> {
             std::io::copy(&mut src, &mut dest)?;
             dest.sync_all()?;
             restrict_to_owner(&candidate)?;
+            // The copy created a new directory entry: sync the directory
+            // so the backup survives a power loss.
+            if let Some(dir) = path.parent() {
+                fsync_dir(dir);
+            }
             return Ok(candidate);
         }
         trial += 1;
@@ -483,22 +548,34 @@ pub fn get_key(dir: &Path) -> AppResult<String> {
     let _ = std::fs::remove_file(&tmp);
     // Write to a temp file with the final mode before renaming it into
     // place, so the key is never observable with broader permissions.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true);
+    opts.create_new(true);
     #[cfg(unix)]
     {
-        use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.write_all(key.as_bytes())?;
+        opts.mode(0o600);
     }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&tmp, &key)?;
-    }
-    std::fs::rename(&tmp, &path)?;
+    let mut file = opts
+        .open(&tmp)
+        .with_context(|| format!("opening key temp file {}", tmp.display()))?;
+    file.write_all(key.as_bytes())
+        .with_context(|| format!("writing key temp file {}", tmp.display()))?;
+    // Same durability contract as `save`: sync the key temp before the
+    // rename, and the directory after it. Drop the handle before the
+    // rename — on Windows an open handle on the source can block a
+    // replace-rename.
+    file.sync_all()
+        .with_context(|| format!("syncing key temp file {}", tmp.display()))?;
+    drop(file);
+    std::fs::rename(&tmp, &path).with_context(|| {
+        format!(
+            "renaming key temp file {} over {}",
+            tmp.display(),
+            path.display()
+        )
+    })?;
+    fsync_dir(dir);
     Ok(key)
 }
 
@@ -549,6 +626,11 @@ fn preserve_corrupt_key(path: &Path) -> AppResult<Option<PathBuf>> {
             // tightening it to 0600 is part of the contract; a failure
             // propagates instead of being swallowed.
             restrict_to_owner(&candidate)?;
+            // The rename only updates a directory entry: sync the
+            // directory so the backup survives a power loss.
+            if let Some(dir) = path.parent() {
+                fsync_dir(dir);
+            }
             return Ok(Some(candidate));
         }
         trial += 1;

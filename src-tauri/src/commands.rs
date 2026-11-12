@@ -9,7 +9,6 @@ use crate::watcher::{hydrate_folder, SharedWatchers};
 use anyhow::Context as _;
 use parking_lot::Mutex;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -313,40 +312,68 @@ pub fn get_highlights_key() -> AppResult<String> {
 }
 
 /// Acknowledgement of a close request: the frontend calls this as soon as
-/// it receives the `highlights://flush-request` event, which suppresses the
-/// 2-second "frontend dead" fallback (checked at its expiry) and starts a
-/// 30-second ceiling timer that destroys the window if `confirm_close`
-/// never arrives (the
-/// flush can be slow but not forever).
+/// it receives the `highlights://flush-request` event. It moves the close
+/// guard to `Flushing`, which suppresses the 2 s "frontend dead" fallback
+/// (it only fires from `FlushRequested`) and starts a 30-second ceiling
+/// timer that destroys the window if neither `confirm_close` nor
+/// `cancel_close` arrives (the flush can be slow but not forever). A
+/// stale or duplicated ack in any other phase is a no-op.
 #[tauri::command]
 pub fn ack_close_request(app: AppHandle) -> AppResult<()> {
     let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() else {
         return Ok(());
     };
-    guard.acked.store(true, Ordering::SeqCst);
-    let guard = Arc::clone(&*guard);
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| AppError::Other(anyhow::anyhow!("no main window")))?
-        .clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        if !guard.confirmed.load(Ordering::SeqCst) && !guard.cancelled.load(Ordering::SeqCst) {
-            let _ = window.destroy();
-        }
-    });
+    let transitioned = {
+        let mut phase = guard.phase.lock();
+        let next = crate::handle_ack(*phase);
+        let t = next != *phase;
+        *phase = next;
+        t
+    };
+    if transitioned {
+        let guard = Arc::clone(&*guard);
+        let window = app
+            .get_webview_window("main")
+            .ok_or_else(|| AppError::Other(anyhow::anyhow!("no main window")))?
+            .clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let destroy = {
+                let mut phase = guard.phase.lock();
+                let (d, n) = crate::handle_timer(crate::FlushTimer::Ceiling, *phase);
+                *phase = n;
+                d
+            };
+            if destroy {
+                let _ = window.destroy();
+            }
+        });
+    }
     Ok(())
 }
 
 /// Final word on a close request: the frontend calls this after its
-/// highlights flush has landed, which destroys the main window and stops
-/// the 30 s ceiling. It must only be called by our own webview.
+/// highlights flush has landed, which destroys the main window. It is
+/// honored only from an in-flight flush (`Flushing`, or a
+/// protocol-violating `FlushRequested` where the ack was skipped) — a
+/// confirm after a failed (cancelled) flush, or a stray confirm from
+/// anywhere else, does not close the window. It must only be called by
+/// our own webview.
 #[tauri::command]
 pub fn confirm_close(app: AppHandle) -> AppResult<()> {
-    if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
-        guard.confirmed.store(true, Ordering::SeqCst);
-    }
-    if let Some(window) = app.get_webview_window("main") {
+    let destroy = {
+        let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() else {
+            return Ok(());
+        };
+        let mut phase = guard.phase.lock();
+        let (next, d) = crate::handle_confirm(*phase);
+        *phase = next;
+        d
+    };
+    if destroy {
+        let Some(window) = app.get_webview_window("main") else {
+            return Ok(());
+        };
         window
             .destroy()
             .map_err(|e| AppError::Other(anyhow::anyhow!("destroying the main window: {e}")))?;
@@ -354,13 +381,15 @@ pub fn confirm_close(app: AppHandle) -> AppResult<()> {
     Ok(())
 }
 
-/// Cancel a close request after a failed highlights flush: stops the 30 s
-/// ceiling timer but does not close the window. `attempted` is left set, so
-/// the *next* close request closes for real ("close without saving").
+/// Cancel a close request after a failed highlights flush: the window
+/// stays open, and the guard moves to `DiscardAllowed`, so the *next*
+/// close request closes for real ("close without saving"). A stale cancel
+/// outside an in-flight flush cycle is a no-op.
 #[tauri::command]
 pub fn cancel_close(app: AppHandle) -> AppResult<()> {
     if let Some(guard) = app.try_state::<Arc<crate::CloseGuard>>() {
-        guard.cancelled.store(true, Ordering::SeqCst);
+        let mut phase = guard.phase.lock();
+        *phase = crate::handle_cancel(*phase);
     }
     Ok(())
 }

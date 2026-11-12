@@ -15,7 +15,6 @@ use parking_lot::Mutex;
 use registry::{FolderRegistry, SharedRegistry};
 use settings::{settings_dir, Settings};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Manager;
 use watcher::{hydrate_folder, hydrate_folders, SharedWatchers, Watchers};
@@ -25,20 +24,132 @@ use watcher::{hydrate_folder, hydrate_folders, SharedWatchers, Watchers};
 /// command.
 const HIGHLIGHTS_FLUSH_EVENT: &str = "highlights://flush-request";
 
+/// Phases of the main window's close-request flow. The transitions are
+/// pure functions over this enum (below), so they are unit-testable
+/// without a window; the guard is a single mutex holding the current
+/// phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClosePhase {
+    /// No close in flight.
+    Idle,
+    /// A close was intercepted and the `highlights://flush-request`
+    /// event was emitted; waiting for the frontend ack.
+    FlushRequested,
+    /// The frontend acked the flush request; a save is in progress.
+    Flushing,
+    /// The frontend cancelled (its flush failed). The next close request
+    /// passes through: "close without saving".
+    DiscardAllowed,
+    /// Terminal: destroy has been ordered (`confirm_close`, the 2 s
+    /// no-ack fallback, or the 30 s ceiling).
+    Closing,
+}
+
+/// What to do with a close request: intercept it, or let it through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloseAction {
+    /// `api.prevent_close()`. `emit` is `true` only for the first
+    /// request of a flush cycle: it fires the `highlights://flush-request`
+    /// event and starts the 2 s no-ack fallback. A request while a flush
+    /// is already in flight intercepts again with no new event and no
+    /// new timer.
+    Intercept { emit: bool },
+    /// Let the window close: the last flush failed (`DiscardAllowed`)
+    /// and the user chose to leave without saving.
+    Pass,
+}
+
+/// Which timer fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FlushTimer {
+    /// The 2 s "frontend never acked" fallback, started by the first
+    /// intercepted close.
+    NoAck,
+    /// The 30 s ceiling, started by the ack.
+    Ceiling,
+}
+
+/// Decide how to handle a new close request in `phase`, and the phase
+/// that results.
+///
+/// A close while `FlushRequested` or `Flushing` is intercepted again —
+/// the in-flight save must not be lost by a second close (the old guard
+/// passed a second close through once any close had been attempted,
+/// which destroyed the window mid-save). Only `DiscardAllowed` (a failed
+/// flush) lets a close through.
+fn handle_close_request(phase: ClosePhase) -> (CloseAction, ClosePhase) {
+    match phase {
+        ClosePhase::Idle => (
+            CloseAction::Intercept { emit: true },
+            ClosePhase::FlushRequested,
+        ),
+        ClosePhase::FlushRequested | ClosePhase::Flushing => {
+            (CloseAction::Intercept { emit: false }, phase)
+        }
+        ClosePhase::DiscardAllowed => (CloseAction::Pass, ClosePhase::DiscardAllowed),
+        ClosePhase::Closing => (CloseAction::Intercept { emit: false }, ClosePhase::Closing),
+    }
+}
+
+/// Decide whether `timer` firing in `phase` destroys the window, and the
+/// phase that results (a destroy moves to `Closing`).
+///
+/// `NoAck` fires only from `FlushRequested`: the frontend is dead or the
+/// event was lost, so no flush is in flight. Once acked (`Flushing`) the
+/// 30 s ceiling governs instead. `DiscardAllowed` keeps the window open in
+/// either case — a cancelled (failed) flush must not be undone by a
+/// timer.
+fn handle_timer(timer: FlushTimer, phase: ClosePhase) -> (bool, ClosePhase) {
+    match (timer, phase) {
+        (FlushTimer::NoAck, ClosePhase::FlushRequested) => (true, ClosePhase::Closing),
+        (FlushTimer::Ceiling, ClosePhase::Flushing) => (true, ClosePhase::Closing),
+        _ => (false, phase),
+    }
+}
+
+/// The phase after the frontend acked the flush request. Only an ack in
+/// `FlushRequested` counts; a stale or duplicated ack in any other phase
+/// is a no-op (and starts no ceiling).
+fn handle_ack(phase: ClosePhase) -> ClosePhase {
+    match phase {
+        ClosePhase::FlushRequested => ClosePhase::Flushing,
+        other => other,
+    }
+}
+
+/// The phase after `confirm_close` (the flush has landed), and whether
+/// the window should be destroyed now. Only from `Flushing` — or from
+/// `FlushRequested`, where the frontend skipped the ack but says the
+/// flush landed, which is data-safe to destroy. Never from
+/// `DiscardAllowed`: a flush that failed has told the user the window
+/// stays open, and a stray late confirm must not undo that.
+fn handle_confirm(phase: ClosePhase) -> (ClosePhase, bool) {
+    match phase {
+        ClosePhase::Flushing | ClosePhase::FlushRequested => (ClosePhase::Closing, true),
+        other => (other, false),
+    }
+}
+
+/// The phase after `cancel_close` (the flush failed: stay open, and let
+/// the next close through — "close without saving"). Only from an
+/// in-flight flush cycle; a stale cancel is a no-op.
+fn handle_cancel(phase: ClosePhase) -> ClosePhase {
+    match phase {
+        ClosePhase::FlushRequested | ClosePhase::Flushing => ClosePhase::DiscardAllowed,
+        other => other,
+    }
+}
+
 /// Close-request state for the main window, shared with the frontend-ack
-/// flow through the `Arc` in managed state. `attempted` marks that a close
-/// has been intercepted (a second request before the ack passes through and
-/// closes for real); `acked` means the frontend received the flush request
-/// (suppressing the 2 s "frontend dead" fallback and starting the 30 s
-/// ceiling); `confirmed` means `confirm_close` arrived (flush landed);
-/// `cancelled` means `cancel_close` arrived (flush failed, stay open). The
-/// main window is created once per process (this app never creates a
+/// flow through the `Arc` in managed state. A single mutex-held phase
+/// instead of four racing flags: every transition is a compare-and-swap
+/// decided by the pure `handle_*` functions above, so a second close
+/// during an in-flight flush is intercepted (not passed through) and a
+/// stale ack/confirm/cancel can no longer undo a decision. The main
+/// window is created once per process (this app never creates a
 /// replacement one), so the guard is per process.
 struct CloseGuard {
-    attempted: AtomicBool,
-    acked: AtomicBool,
-    confirmed: AtomicBool,
-    cancelled: AtomicBool,
+    phase: Mutex<ClosePhase>,
 }
 
 /// Handle a new CLI target from either single-instance forwarding or macOS
@@ -100,12 +211,16 @@ pub fn run() {
         // the first request is intercepted so the frontend can flush
         // in-flight highlight saves. The frontend answers with
         // `ack_close_request` (it is alive: a 30 s ceiling now governs and
-        // the 2 s fallback below is suppressed) and then `confirm_close`
-        // (flush landed: destroy) or `cancel_close` (flush failed: stay
-        // open). A second request before the ack lands closes for real.
-        // The JS `onCloseRequested` API is deliberately not used: its
-        // close path calls `destroy()`, which needs the
-        // `core:window:allow-destroy` capability (a permission change).
+        // the 2 s fallback below no longer applies) and then
+        // `confirm_close` (flush landed: destroy) or `cancel_close`
+        // (flush failed: stay open). A further close request while the
+        // flush cycle is in flight is intercepted again — no new event,
+        // no new timers — so an in-flight save cannot be lost; only after
+        // a cancelled (failed) flush (`DiscardAllowed`) does a close pass
+        // through without saving. The JS `onCloseRequested` API is
+        // deliberately not used: its close path calls `destroy()`, which
+        // needs the `core:window:allow-destroy` capability (a permission
+        // change).
         // The macOS menu's Quit item (⌘Q) is a custom item that routes
         // through this same flow (see `menu.rs`). Dock "Quit" and OS
         // logout terminate the process directly and bypass it.
@@ -119,27 +234,46 @@ pub fn run() {
             let Some(guard) = window.app_handle().try_state::<Arc<CloseGuard>>() else {
                 return;
             };
-            // A second close request before the first was acknowledged:
-            // pass through and close for real ("close without saving").
-            if guard.attempted.swap(true, Ordering::SeqCst) {
-                return;
-            }
-            api.prevent_close();
-            let _ = tauri::Emitter::emit(window, HIGHLIGHTS_FLUSH_EVENT, ());
-            // The frontend acks as soon as it receives the flush request.
-            // If it never does (JS dead or the event undelivered), destroy
-            // after 2 s. A plain OS thread avoids needing a tokio `time`
-            // dependency; `Window::destroy` is dispatcher-based and
-            // thread-safe. Once the frontend has acked, the 30 s ceiling
-            // started by `ack_close_request` supersedes this fallback.
-            let guard = Arc::clone(&*guard);
-            let window = window.clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if !guard.acked.load(Ordering::SeqCst) {
-                    let _ = window.destroy();
+            let action = {
+                let mut phase = guard.phase.lock();
+                let (a, n) = handle_close_request(*phase);
+                *phase = n;
+                a
+            };
+            match action {
+                CloseAction::Intercept { emit } => {
+                    api.prevent_close();
+                    if !emit {
+                        return;
+                    }
+                    let _ = tauri::Emitter::emit(window, HIGHLIGHTS_FLUSH_EVENT, ());
+                    // The frontend acks as soon as it receives the flush
+                    // request. If it never does (JS dead or the event
+                    // undelivered), destroy after 2 s. A plain OS thread
+                    // avoids needing a tokio `time` dependency;
+                    // `Window::destroy` is dispatcher-based and
+                    // thread-safe. The check at expiry is phase-aware: an
+                    // ack (`Flushing`) or a cancel (`DiscardAllowed`) in
+                    // the meantime suppresses it.
+                    let guard = Arc::clone(&*guard);
+                    let window = window.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_secs(2));
+                        let destroy = {
+                            let mut phase = guard.phase.lock();
+                            let (d, n) = handle_timer(FlushTimer::NoAck, *phase);
+                            *phase = n;
+                            d
+                        };
+                        if destroy {
+                            let _ = window.destroy();
+                        }
+                    });
                 }
-            });
+                // Let the window close: the last flush failed and the
+                // user has asked to leave without saving.
+                CloseAction::Pass => {}
+            }
         })
         .setup(move |app| {
             settings::migrate_legacy_settings();
@@ -163,10 +297,7 @@ pub fn run() {
 
             app.manage(InitialTargetState(Mutex::new(initial_resolved)));
             app.manage(Arc::new(CloseGuard {
-                attempted: AtomicBool::new(false),
-                acked: AtomicBool::new(false),
-                confirmed: AtomicBool::new(false),
-                cancelled: AtomicBool::new(false),
+                phase: Mutex::new(ClosePhase::Idle),
             }));
             app.manage(loaded_settings.status);
             app.manage(Arc::clone(&registry));
@@ -233,4 +364,166 @@ pub fn run() {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod close_guard {
+    use super::*;
+
+    #[test]
+    fn first_close_intercepts_and_requests_a_flush() {
+        let (action, next) = handle_close_request(ClosePhase::Idle);
+        assert_eq!(action, CloseAction::Intercept { emit: true });
+        assert_eq!(next, ClosePhase::FlushRequested);
+    }
+
+    #[test]
+    fn a_second_close_while_waiting_for_the_ack_is_intercepted_again() {
+        let (action, next) = handle_close_request(ClosePhase::FlushRequested);
+        assert_eq!(action, CloseAction::Intercept { emit: false });
+        assert_eq!(next, ClosePhase::FlushRequested);
+    }
+
+    #[test]
+    fn a_second_close_during_an_in_flight_flush_is_intercepted_not_passed() {
+        // The regression this exists to fix: the old guard let a second
+        // close through once any close had been attempted, destroying the
+        // window while an acknowledged save was still in flight.
+        let (action, next) = handle_close_request(ClosePhase::Flushing);
+        assert_eq!(action, CloseAction::Intercept { emit: false });
+        assert_eq!(next, ClosePhase::Flushing);
+    }
+
+    #[test]
+    fn a_close_after_a_failed_flush_passes_through() {
+        let (action, next) = handle_close_request(ClosePhase::DiscardAllowed);
+        assert_eq!(action, CloseAction::Pass);
+        assert_eq!(next, ClosePhase::DiscardAllowed);
+    }
+
+    #[test]
+    fn a_close_while_closing_is_intercepted() {
+        let (action, next) = handle_close_request(ClosePhase::Closing);
+        assert_eq!(action, CloseAction::Intercept { emit: false });
+        assert_eq!(next, ClosePhase::Closing);
+    }
+
+    #[test]
+    fn an_ack_moves_flush_requested_to_flushing() {
+        assert_eq!(handle_ack(ClosePhase::FlushRequested), ClosePhase::Flushing);
+    }
+
+    #[test]
+    fn a_stale_ack_is_a_noop() {
+        for phase in [
+            ClosePhase::Idle,
+            ClosePhase::Flushing,
+            ClosePhase::DiscardAllowed,
+            ClosePhase::Closing,
+        ] {
+            assert_eq!(handle_ack(phase), phase);
+        }
+    }
+
+    #[test]
+    fn a_confirm_after_a_landed_flush_destroys() {
+        assert_eq!(
+            handle_confirm(ClosePhase::Flushing),
+            (ClosePhase::Closing, true)
+        );
+    }
+
+    #[test]
+    fn a_confirm_that_skipped_the_ack_still_destroys() {
+        // Off-protocol (no ack first), but the frontend says the flush
+        // landed, so destroying is data-safe.
+        assert_eq!(
+            handle_confirm(ClosePhase::FlushRequested),
+            (ClosePhase::Closing, true)
+        );
+    }
+
+    #[test]
+    fn a_confirm_after_a_failed_flush_does_not_destroy() {
+        // A late or duplicated confirm after a cancelled (failed) flush
+        // must not undo "stay open".
+        assert_eq!(
+            handle_confirm(ClosePhase::DiscardAllowed),
+            (ClosePhase::DiscardAllowed, false)
+        );
+        assert_eq!(handle_confirm(ClosePhase::Idle), (ClosePhase::Idle, false));
+        assert_eq!(
+            handle_confirm(ClosePhase::Closing),
+            (ClosePhase::Closing, false)
+        );
+    }
+
+    #[test]
+    fn a_cancel_moves_the_flush_cycle_to_discard_allowed() {
+        assert_eq!(
+            handle_cancel(ClosePhase::FlushRequested),
+            ClosePhase::DiscardAllowed
+        );
+        assert_eq!(
+            handle_cancel(ClosePhase::Flushing),
+            ClosePhase::DiscardAllowed
+        );
+    }
+
+    #[test]
+    fn a_stale_cancel_is_a_noop() {
+        for phase in [
+            ClosePhase::Idle,
+            ClosePhase::DiscardAllowed,
+            ClosePhase::Closing,
+        ] {
+            assert_eq!(handle_cancel(phase), phase);
+        }
+    }
+
+    #[test]
+    fn the_no_ack_fallback_destroys_only_when_unacked() {
+        assert_eq!(
+            handle_timer(FlushTimer::NoAck, ClosePhase::FlushRequested),
+            (true, ClosePhase::Closing)
+        );
+        // Acked: the 30 s ceiling governs, not this fallback.
+        assert_eq!(
+            handle_timer(FlushTimer::NoAck, ClosePhase::Flushing),
+            (false, ClosePhase::Flushing)
+        );
+        // Cancelled (even before an ack): the window must stay open.
+        assert_eq!(
+            handle_timer(FlushTimer::NoAck, ClosePhase::DiscardAllowed),
+            (false, ClosePhase::DiscardAllowed)
+        );
+        assert_eq!(
+            handle_timer(FlushTimer::NoAck, ClosePhase::Idle),
+            (false, ClosePhase::Idle)
+        );
+        assert_eq!(
+            handle_timer(FlushTimer::NoAck, ClosePhase::Closing),
+            (false, ClosePhase::Closing)
+        );
+    }
+
+    #[test]
+    fn the_ceiling_destroys_only_a_hung_flush() {
+        assert_eq!(
+            handle_timer(FlushTimer::Ceiling, ClosePhase::Flushing),
+            (true, ClosePhase::Closing)
+        );
+        assert_eq!(
+            handle_timer(FlushTimer::Ceiling, ClosePhase::FlushRequested),
+            (false, ClosePhase::FlushRequested)
+        );
+        assert_eq!(
+            handle_timer(FlushTimer::Ceiling, ClosePhase::DiscardAllowed),
+            (false, ClosePhase::DiscardAllowed)
+        );
+        assert_eq!(
+            handle_timer(FlushTimer::Ceiling, ClosePhase::Idle),
+            (false, ClosePhase::Idle)
+        );
+    }
 }

@@ -442,8 +442,9 @@ export function HighlightsProvider({ children }: { children: React.ReactNode }) 
   // after `api.prevent_close()`. We acknowledge it immediately (so Rust drops
   // its 2-second "frontend dead" fallback and starts a 30-second ceiling),
   // then flush: on success we confirm the close (Rust destroys the window);
-  // on failure we cancel it (the window stays open; `attempted` stays set on
-  // Rust, so closing again closes for real) and tell the user to close again.
+  // on failure we cancel it (the window stays open; Rust's close guard
+  // moves to `DiscardAllowed`, so closing again closes for real) and tell
+  // the user to close again.
   React.useEffect(() => {
     if (!inTauri()) return;
     let unlisten: UnlistenFn | null = null;

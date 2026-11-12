@@ -98,9 +98,10 @@ export const tauri = {
    */
   confirmClose: () => invoke<void>("confirm_close"),
   /**
-   * Cancel a window close after a failed highlights flush: stops the 30-second
-   * ceiling without closing the window. `attempted` stays set on the backend,
-   * so a later close request closes for real ("close without saving").
+   * Cancel a window close after a failed highlights flush: stops the
+   * 30-second ceiling without closing the window. The backend's close
+   * guard moves to `DiscardAllowed`, so a later close request closes for
+   * real ("close without saving").
    */
   cancelClose: () => invoke<void>("cancel_close"),
 };
