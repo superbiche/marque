@@ -33,6 +33,7 @@ import {
   type TabState,
 } from "@/lib/workspace";
 import { cn } from "@/lib/utils";
+import { createPrintGuard, type PrintGuard } from "@/lib/printGuard";
 
 const WELCOME = `# Welcome to Marque
 
@@ -51,12 +52,6 @@ marque README.md       # open a file
 marque ./docs/         # open a folder (auto-saved)
 \`\`\`
 `;
-
-// window.print() on this webview returns before the print sheet is dismissed
-// (and this webview never fires beforeprint/afterprint), so a re-entry
-// cooldown is the only guard against opening a second sheet from a double
-// ⌘P while the first is still up.
-const PRINT_REENTRY_COOLDOWN_MS = 500;
 
 function AppShell() {
   const [state, dispatch] = useReducer(reduce, undefined, () => createInitialState(WELCOME));
@@ -204,7 +199,36 @@ function AppShell() {
   // Printing no longer flips the theme: Shiki output is theme-agnostic (CSS
   // variables, mapped in markdown.css), and the print block forces the light
   // values, so the sheet can never re-darken behind the dialog.
-  const printingRef = useRef(false);
+  //
+  // Print re-entry guard (src/lib/printGuard): arming is synchronous before
+  // window.print() runs, so a second ⌘P while a sheet/dialog is up is dropped.
+  // It releases on the first completion signal — afterprint (native path),
+  // focus (the dialog is a separate modal window), or visibility (full-screen
+  // preview) — and, on macOS where none of those fire, on its bounded
+  // fallback. The guard is a stable singleton; the completion listeners below
+  // only ever call release(), which is idempotent.
+  const printGuardRef = useRef<PrintGuard | null>(null);
+  if (printGuardRef.current === null) printGuardRef.current = createPrintGuard();
+  const printGuard = printGuardRef.current;
+
+  // Completion signals that release the print guard. Registered once; each
+  // just calls release() (idempotent), so whichever fires first wins and the
+  // rest are harmless no-ops.
+  useEffect(() => {
+    const onAfterPrint = () => printGuard.release();
+    const onFocus = () => printGuard.release();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") printGuard.release();
+    };
+    window.addEventListener("afterprint", onAfterPrint);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("afterprint", onAfterPrint);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [printGuard]);
 
   const handleArticleChange = useCallback((paneId: string, el: HTMLElement | null) => {
     setArticles((prev) => {
@@ -243,21 +267,17 @@ function AppShell() {
     }
   }, [state.tabs, flush]);
 
-  const handlePrint = useCallback(async () => {
-    if (printingRef.current) return;
-    printingRef.current = true;
-    try {
-      // Nothing to re-render: the document is always print-ready in whatever
-      // theme it is in (see the print block in markdown.css and index.css).
-      window.print();
-    } finally {
-      // window.print() may return before the sheet is dismissed (macOS), so a
-      // plain immediate reset would let a second ⌘P open a second sheet.
-      window.setTimeout(() => {
-        printingRef.current = false;
-      }, PRINT_REENTRY_COOLDOWN_MS);
-    }
-  }, []);
+  const handlePrint = useCallback(() => {
+    // A print is already in flight: drop the re-entry. Arming is synchronous,
+    // before window.print() below, so this also blocks a rapid double ⌘P
+    // before the sheet has even opened (the case the old 500 ms cooldown
+    // handled, but which it left open for the whole rest of the sheet).
+    if (printGuard.isBlocked) return;
+    printGuard.arm();
+    // Nothing to re-render: the document is always print-ready in whatever
+    // theme it is in (see the print block in markdown.css and index.css).
+    window.print();
+  }, [printGuard]);
 
   // File drop opens as new tab.
   useEffect(() => {
@@ -390,7 +410,7 @@ function AppShell() {
         setSearchPaneId(state.activePaneId);
         break;
       case "print":
-        void handlePrint();
+        handlePrint();
         break;
       case "split_right":
         dispatch({ type: "SPLIT", direction: "vertical" });

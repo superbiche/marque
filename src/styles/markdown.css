@@ -123,12 +123,22 @@
 .markdown-body pre.shiki span {
   color: var(--shiki-light, inherit);
   background-color: var(--shiki-light-bg, var(--muted));
+  /* Bold / italic / underline ride as --shiki-light-font-* / -text-decoration
+     variables (pinned by the markdown-fence test in
+     src/lib/highlight.test.ts); the fallbacks cover plain tokens that carry
+     none of them. */
+  font-weight: var(--shiki-light-font-weight, normal);
+  font-style: var(--shiki-light-font-style, normal);
+  text-decoration: var(--shiki-light-text-decoration, none);
 }
 html.dark .markdown-body pre.shiki,
 html.dark .markdown-body pre.shiki code,
 html.dark .markdown-body pre.shiki span {
   color: var(--shiki-dark, inherit);
   background-color: var(--shiki-dark-bg, var(--muted));
+  font-weight: var(--shiki-dark-font-weight, normal);
+  font-style: var(--shiki-dark-font-style, normal);
+  text-decoration: var(--shiki-dark-text-decoration, none);
 }
 
 .markdown-body .copy-code-btn {
@@ -300,6 +310,9 @@ html.dark .markdown-body pre.shiki span {
   html.dark .markdown-body pre.shiki span {
     color: var(--shiki-light, inherit);
     background-color: var(--shiki-light-bg, var(--muted));
+    font-weight: var(--shiki-light-font-weight, normal);
+    font-style: var(--shiki-light-font-style, normal);
+    text-decoration: var(--shiki-light-text-decoration, none);
   }
 
   /* Mermaid bakes its palette into the SVG (both a <style> block and inline

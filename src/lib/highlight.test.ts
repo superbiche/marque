@@ -50,4 +50,26 @@ describe("highlightCode (Shiki dual-theme output)", () => {
     expect(pre![0]).toMatch(/<pre class="shiki shiki-themes github-light github-dark"/);
     expect(html).not.toMatch(inlineColourDecl);
   });
+
+  // A markdown fence is where Shiki emits font-* / text-decoration variables
+  // (bold / italic / underline) instead of colour-only tokens. markdown.css
+  // maps exactly these variable names onto font-weight / font-style /
+  // text-decoration for screen light, screen dark and print; pinning them
+  // here keeps that CSS contract from silently rotting if a Shiki build
+  // renames or drops them.
+  it("emits font-weight / font-style / text-decoration variables for markdown bold/italic/link", async () => {
+    const code = "**bold** and *italic* and [a link](https://example.com)";
+    const html = await highlightCode(code, "markdown");
+
+    // Bold -> font-weight, italic -> font-style, link -> text-decoration, in
+    // both the light and the dark palette.
+    expect(html).toContain("--shiki-light-font-weight:bold");
+    expect(html).toContain("--shiki-dark-font-weight:bold");
+    expect(html).toContain("--shiki-light-font-style:italic");
+    expect(html).toContain("--shiki-dark-font-style:italic");
+    expect(html).toContain("--shiki-light-text-decoration:underline");
+    expect(html).toContain("--shiki-dark-text-decoration:underline");
+    // And, as for every other token, no inline colour.
+    expect(html).not.toMatch(inlineColourDecl);
+  });
 });

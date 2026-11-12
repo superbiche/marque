@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - macOS: printing a document shown in the dark theme no longer flashes the app to the light theme (and can no longer come back dark once the print sheet is dismissed). Code blocks now render theme-agnostic markup that the print styles force to the light palette, so the app's theme is never touched when printing; the on-screen appearance is unchanged.
+- Double ⌘P (or ⌘P + the toolbar printer button) while a print sheet is still up no longer opens a second sheet. A print now arms a re-entry guard that stays up until the sheet is genuinely dismissed — released by the first of the `afterprint` / window-`focus` / document-visible signals (which is how WebKitGTK and WebView2 close their dialogs) or, on macOS where Tauri's native print sheet reports no completion to the page, by a bounded 60-second fallback so the guard can never stick.
+- Bold, italic and underlined text inside a markdown code fence (e.g. a ` ```markdown ` block showing `**bold**` / `*italic*` / a link) now renders with its weight, slant and underline on screen and in print. Shiki emits these as `--shiki-*-font-style` / `-font-weight` / `-text-decoration` variables; the styles now map them (with the light values forced in print, matching the colour mapping).
 
 ## Hard fork - 2026-08-02
 
