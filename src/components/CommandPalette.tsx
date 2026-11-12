@@ -71,6 +71,10 @@ export function CommandPalette({
 }: Props) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
+  // The query `results` was computed for. The file group renders only when
+  // it equals the current query, so a batch for an earlier query is neither
+  // shown nor selectable while the new query's search is still in flight.
+  const [resultsQuery, setResultsQuery] = useState("");
   const { setTheme } = useTheme();
   const { zoomIn, zoomOut, zoomReset } = usePreferences();
 
@@ -83,9 +87,15 @@ export function CommandPalette({
     const t = setTimeout(async () => {
       try {
         const r = await tauri.searchFiles(query, 50);
-        if (!cancelled) setResults(r);
+        if (!cancelled) {
+          setResults(r);
+          setResultsQuery(query);
+        }
       } catch {
-        if (!cancelled) setResults([]);
+        if (!cancelled) {
+          setResults([]);
+          setResultsQuery(query);
+        }
       }
     }, 25);
     return () => {
@@ -242,7 +252,10 @@ export function CommandPalette({
           </CommandGroup>
         )}
 
-        {results.length > 0 && (
+        // Only files for the current query: a batch computed for an earlier
+        // query stays in state (its new search is still in flight) but must
+        // not be rendered or selectable in the meantime.
+        {resultsQuery === query && results.length > 0 && (
           <CommandGroup heading="Files">
             {results.map((r) => (
               <CommandItem
