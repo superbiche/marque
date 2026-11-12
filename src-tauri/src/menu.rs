@@ -3,10 +3,9 @@
 //! `build_menu` compiles on every platform so clippy and the test suite
 //! type-check it, but the menu is installed only on macOS (see the
 //! `#[cfg(target_os = "macos")]` block in `lib.rs`); Linux and Windows keep
-//! their chromeless window. On macOS AppKit consumes a menu accelerator before
-//! the webview receives the key, so the frontend keydown handler skips the
-//! keys the menu owns (see `src/lib/menuShortcuts.ts`) to avoid running an
-//! action twice.
+//! their chromeless window. On macOS WKWebView passes a key equivalent to this
+//! menu only when the page leaves it unhandled, so the frontend keydown
+//! handler ignores the keys the menu owns (see `src/lib/menuShortcuts.ts`).
 //!
 //! Custom items fire a `menu://action` event carrying their id. Two ids are
 //! handled here in Rust instead: `help_github` opens the project page and

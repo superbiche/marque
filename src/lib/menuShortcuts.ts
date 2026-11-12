@@ -1,12 +1,12 @@
 /**
  * Native macOS menu shortcut ownership.
  *
- * On macOS the app installs a native menu bar (see `src-tauri/src/menu.rs`)
- * whose accelerators AppKit runs before the webview gets a chance to react to
- * the key. The global keydown handler skips those keys so an action never
- * fires twice (once from the menu, once from the webview). On Linux and
- * Windows no native menu exists, so nothing is skipped and the webview
- * handler stays the sole owner of every shortcut.
+ * On macOS the app installs a native menu bar (see `src-tauri/src/menu.rs`).
+ * WKWebView delivers a key equivalent to the page first and passes it on to
+ * the menu only if the page leaves it unhandled, so the global keydown
+ * handler ignores these keys without calling preventDefault: the menu runs
+ * the action, once. On Linux and Windows no native menu exists, so nothing is
+ * skipped and the webview handler stays the sole owner of every shortcut.
  */
 
 /**
