@@ -310,7 +310,10 @@ pub fn run() {
         // change).
         // The macOS menu's Quit item (⌘Q) is a custom item that routes
         // through this same flow (see `menu.rs`). Dock "Quit" and OS
-        // logout terminate the process directly and bypass it.
+        // logout end the process without a `RunEvent::ExitRequested`
+        // (upstream: tauri-apps/tauri#9198); a close request they trigger
+        // cannot hold the exit, so a save in flight at that instant is
+        // lost. See the `gap:` in `ROADMAP.md`.
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
