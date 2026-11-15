@@ -8,8 +8,10 @@ import {
   CommandItem,
 } from "@/components/ui/command";
 import { Badge } from "@/components/ui/badge";
-import { tauri, type SearchResult, type Folder } from "@/lib/tauri";
+import { tauri, type Folder } from "@/lib/tauri";
 import { rankActions } from "@/lib/actionSearch";
+import type { PaletteSource } from "@/lib/paletteSources";
+import { usePaletteResults } from "./usePaletteResults";
 import type { LucideIcon } from "lucide-react";
 import {
   FileText,
@@ -70,39 +72,13 @@ export function CommandPalette({
   onToggleHighlights,
 }: Props) {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  // The query `results` was computed for. The file group renders only when
-  // it equals the current query, so a batch for an earlier query is neither
-  // shown nor selectable while the new query's search is still in flight.
-  const [resultsQuery, setResultsQuery] = useState("");
   const { setTheme } = useTheme();
   const { zoomIn, zoomOut, zoomReset } = usePreferences();
 
+  // Closing clears the query; the next opening starts empty.
   useEffect(() => {
-    if (!open) {
-      setQuery("");
-      return;
-    }
-    let cancelled = false;
-    const t = setTimeout(async () => {
-      try {
-        const r = await tauri.searchFiles(query, 50);
-        if (!cancelled) {
-          setResults(r);
-          setResultsQuery(query);
-        }
-      } catch {
-        if (!cancelled) {
-          setResults([]);
-          setResultsQuery(query);
-        }
-      }
-    }, 25);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [query, open]);
+    if (!open) setQuery("");
+  }, [open]);
 
   const handleAddFolder = async () => {
     onOpenChange(false);
@@ -197,84 +173,114 @@ export function CommandPalette({
     },
   ];
 
-  // Empty query: every visible action, in definition order. Typed query: the
-  // best matches first, capped — actions stay findable while typing, and a
-  // short list sits above the (Rust-ranked) file results.
-  const visibleActions = actions.filter((a) => a.visible);
-  const byId = new Map(visibleActions.map((a) => [a.id, a]));
-  const shownActions = rankActions(query, visibleActions)
-    .map((r) => byId.get(r.id))
-    .filter((a): a is PaletteAction => a != null)
-    .slice(0, query.trim() ? MAX_ACTION_RESULTS : undefined);
+  // Group order is source order. Each source ranks its own results.
+  const sources: PaletteSource[] = [
+    {
+      // Empty query: every visible action, in definition order. Typed query:
+      // the best matches first, capped — actions stay findable while typing,
+      // and a short list sits above the (Rust-ranked) file results.
+      kind: "sync",
+      id: "actions",
+      heading: "Actions",
+      search: (q) => {
+        const visible = actions.filter((a) => a.visible);
+        const byId = new Map(visible.map((a) => [a.id, a]));
+        return rankActions(q, visible)
+          .map((r) => byId.get(r.id))
+          .filter((a): a is PaletteAction => a != null)
+          .slice(0, q.trim() ? MAX_ACTION_RESULTS : undefined)
+          .map((a) => {
+            const Icon = a.icon;
+            return {
+              key: a.id,
+              value: a.id,
+              onSelect: a.run,
+              render: () => (
+                <>
+                  <Icon className="mr-2 h-4 w-4" />
+                  {a.label}
+                </>
+              ),
+            };
+          });
+      },
+    },
+    {
+      kind: "sync",
+      id: "folders",
+      heading: "Jump to Folder",
+      search: (q) =>
+        q !== ""
+          ? []
+          : folders.map((f) => ({
+              key: f.id,
+              value: `folder ${f.name}`,
+              onSelect: () => {
+                onJumpToFolder(f.id);
+                onOpenChange(false);
+              },
+              render: () => (
+                <>
+                  <FolderOpen className="mr-2 h-4 w-4 text-muted-foreground" />
+                  <span className="flex-1 truncate">{f.name}</span>
+                  <span className="ml-2 max-w-[20ch] truncate text-xs text-muted-foreground">
+                    {f.path}
+                  </span>
+                </>
+              ),
+            })),
+    },
+    {
+      // Ranked by nucleo in Rust; shown in arrival order.
+      kind: "async",
+      id: "files",
+      heading: "Files",
+      debounceMs: 25,
+      search: async (q) => {
+        const results = await tauri.searchFiles(q, 50);
+        return results.map((r) => ({
+          key: r.absolute_path,
+          value: `${r.folder_name}/${r.relative_path}`,
+          onSelect: () => {
+            onOpenChange(false);
+            onOpenFile(r.absolute_path);
+          },
+          render: () => (
+            <>
+              <FileText className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div className="flex-1 truncate">
+                <div className="truncate font-medium">{r.relative_path.split("/").pop()}</div>
+                <div className="truncate text-xs text-muted-foreground">{r.relative_path}</div>
+              </div>
+              <Badge variant="secondary" className="ml-2 shrink-0">{r.folder_name}</Badge>
+            </>
+          ),
+        }));
+      },
+    },
+  ];
+  const groups = usePaletteResults(sources, query, open);
 
   return (
     // `shouldFilter: false`: each source owns its results — files are
-    // pre-ranked by nucleo in Rust, actions by rankActions above. With the
-    // default on, cmdk would re-filter and re-rank the file results in JS
-    // (its scorer is not nucleo's and can disagree with it).
+    // pre-ranked by nucleo in Rust, actions by rankActions. With the default
+    // on, cmdk would re-filter and re-rank them in JS (its scorer is not
+    // nucleo's and can disagree with it).
     <CommandDialog open={open} onOpenChange={onOpenChange} commandProps={{ shouldFilter: false }}>
       <CommandInput value={query} onValueChange={setQuery} placeholder="Search files or run a command…" />
       <CommandList>
         <CommandEmpty>No results.</CommandEmpty>
-
-        {shownActions.length > 0 && (
-          <CommandGroup heading="Actions">
-            {shownActions.map((a) => {
-              const Icon = a.icon;
-              return (
-                <CommandItem key={a.id} value={a.id} onSelect={a.run}>
-                  <Icon className="mr-2 h-4 w-4" />
-                  {a.label}
-                </CommandItem>
-              );
-            })}
-          </CommandGroup>
-        )}
-
-        {query === "" && folders.length > 0 && (
-          <CommandGroup heading="Jump to Folder">
-            {folders.map((f) => (
-              <CommandItem
-                key={f.id}
-                value={`folder ${f.name}`}
-                onSelect={() => {
-                  onJumpToFolder(f.id);
-                  onOpenChange(false);
-                }}
-              >
-                <FolderOpen className="mr-2 h-4 w-4 text-muted-foreground" />
-                <span className="flex-1 truncate">{f.name}</span>
-                <span className="ml-2 max-w-[20ch] truncate text-xs text-muted-foreground">
-                  {f.path}
-                </span>
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        )}
-
-        {/* Only files for the current query: a batch computed for an earlier
-            query stays in state (its new search is still in flight) but must
-            not be rendered or selectable in the meantime. */}
-        {resultsQuery === query && results.length > 0 && (
-          <CommandGroup heading="Files">
-            {results.map((r) => (
-              <CommandItem
-                key={r.absolute_path}
-                value={`${r.folder_name}/${r.relative_path}`}
-                onSelect={() => {
-                  onOpenChange(false);
-                  onOpenFile(r.absolute_path);
-                }}
-              >
-                <FileText className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="flex-1 truncate">
-                  <div className="truncate font-medium">{r.relative_path.split("/").pop()}</div>
-                  <div className="truncate text-xs text-muted-foreground">{r.relative_path}</div>
-                </div>
-                <Badge variant="secondary" className="ml-2 shrink-0">{r.folder_name}</Badge>
-              </CommandItem>
-            ))}
-          </CommandGroup>
+        {groups.map(
+          ({ source, items }) =>
+            items.length > 0 && (
+              <CommandGroup key={source.id} heading={source.heading}>
+                {items.map((item) => (
+                  <CommandItem key={item.key} value={item.value} onSelect={item.onSelect}>
+                    {item.render()}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ),
         )}
       </CommandList>
     </CommandDialog>

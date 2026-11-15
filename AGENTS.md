@@ -124,5 +124,5 @@ pnpm tauri build         # production bundle
 ## Cmd+K conventions
 
 - One canonical palette component: `CommandPalette.tsx`. Do not build ad-hoc search dialogs elsewhere.
-- Palette sources are **pluggable** — each source is `{ id, label, search(query) -> results }`. Adding a new source (e.g. headings in current file) means adding a source, not forking the palette.
+- Palette sources are **pluggable**: the contract is `PaletteSource` in `src/lib/paletteSources.ts` — `{ id, heading, search }`, either `kind: "sync"` (`search(query) -> PaletteItem[]`, run during render) or `kind: "async"` (`search(query, signal) -> Promise<PaletteItem[]>` after `debounceMs`); each item is `{ key, value, render, onSelect }`, and a source ranks its own results (cmdk filtering is off). `usePaletteResults` runs every source and owns the stale-query gate. Adding a source (e.g. headings in the current file) means appending one to the list in `CommandPalette.tsx`, not changing how the palette searches or renders.
 - Fuzzy matching for files happens in Rust (`nucleo`), not in JS. Keep the frontend dumb: query in, ranked results out.
